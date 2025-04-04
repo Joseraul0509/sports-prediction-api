@@ -2,8 +2,12 @@ from fastapi import FastAPI
 
 app = FastAPI()
 
+@app.get("/")
+def read_root():
+    return {"message": "API de predicciones deportivas en Render"}
+
 @app.get("/api/v1/coincidencias")
-async def get_coincidencias():
+def get_matches():
     return {"message": "Lista de coincidencias"}
 
 @app.get("/api/v1/predicciones")
