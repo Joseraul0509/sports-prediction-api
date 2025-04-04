@@ -1,7 +1,24 @@
 import os
 from fastapi import FastAPI
 import uvicorn
+from supabase import create_client, Client
+from dotenv import load_dotenv  # Solo para pruebas locales
 
+# Cargar variables de entorno (para pruebas locales)
+load_dotenv()
+
+# Leer claves de Supabase desde las variables de entorno
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+# Verificar que las claves se han cargado correctamente
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise ValueError("Las claves de Supabase no están configuradas correctamente.")
+
+# Conectar con Supabase
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# Crear la app de FastAPI
 app = FastAPI()
 
 @app.get("/")
@@ -10,7 +27,8 @@ def read_root():
 
 @app.get("/api/v1/coincidencias")
 def get_matches():
-    return {"message": "Lista de coincidencias"}
+    response = supabase.table("matches").select("*").execute()
+    return response.data
 
 @app.get("/api/v1/predicciones")
 async def get_predicciones():
