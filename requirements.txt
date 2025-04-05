@@ -1,7 +1,8 @@
 fastapi
-uvicorn
-supabase
+uvicorn[standard]
 python-dotenv
-xgboost
-numpy
 pandas
+numpy
+xgboost
+supabase
+httpx
