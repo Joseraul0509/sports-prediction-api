@@ -27,7 +27,7 @@ app = FastAPI()
 # Habilitar CORS para permitir conexiones desde Hostinger u otros dominios
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Puedes poner solo tu dominio, por ejemplo: ["https://tuweb.com"]
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -82,7 +82,7 @@ def generar_predicciones():
 
         df.fillna(0, inplace=True)
         X = df[["score_home", "score_away"]]
-        y = np.random.randint(0, 2, size=len(df))  # Simulación de etiquetas
+        y = np.random.randint(0, 2, size=len(df))
 
         model = xgb.XGBClassifier(use_label_encoder=False, eval_metric="logloss")
         model.fit(X, y)
@@ -93,7 +93,11 @@ def generar_predicciones():
                 "deporte": deporte,
                 "match_id": fila.get("id"),
                 "prediccion": int(predicciones[i]),
-                "fecha": datetime.now().isoformat()
+                "confidence": float(max(model.predict_proba([X.iloc[i]])[0]) * 100),
+                "odds": 1.75,
+                "type": "ML_PREDICTION",
+                "fecha": datetime.now().isoformat(),
+                "reasoning": "Predicción basada en rendimiento histórico"
             }
             nuevas_predicciones.append(pred)
             supabase.table("predictions").insert(pred).execute()
