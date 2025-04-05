@@ -1,5 +1,6 @@
 import os
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 from supabase import create_client, Client
@@ -22,6 +23,15 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # Crear FastAPI
 app = FastAPI()
+
+# Habilitar CORS para permitir conexiones desde Hostinger u otros dominios
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Puedes poner solo tu dominio, por ejemplo: ["https://tuweb.com"]
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.get("/")
 def read_root():
