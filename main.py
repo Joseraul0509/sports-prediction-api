@@ -1,5 +1,6 @@
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 import uvicorn
 from supabase import create_client, Client
 from dotenv import load_dotenv
@@ -38,11 +39,20 @@ def get_predictions():
 
 @app.get("/api/v1/ligas")
 def get_ligas():
-    return {"ligas": ["La Liga", "NBA", "MLB", "NHL"]}
+    return {
+        "ligas": [
+            "La Liga", "Premier League", "NBA", "MLB", "NHL"
+        ]
+    }
 
 @app.get("/api/v1/equipos")
 def get_equipos():
-    return {"equipos": ["Real Madrid", "Lakers", "Yankees", "Maple Leafs"]}
+    return {
+        "equipos": [
+            "Real Madrid", "Barcelona", "Lakers", "Warriors",
+            "Yankees", "Red Sox", "Maple Leafs", "Bruins"
+        ]
+    }
 
 @app.post("/api/v1/predicciones")
 def generar_predicciones():
@@ -64,7 +74,7 @@ def generar_predicciones():
         X = df[["score_home", "score_away"]]
         y = np.random.randint(0, 2, size=len(df))  # Simulación de etiquetas
 
-        model = xgb.XGBClassifier()
+        model = xgb.XGBClassifier(use_label_encoder=False, eval_metric="logloss")
         model.fit(X, y)
         predicciones = model.predict(X)
 
@@ -76,15 +86,15 @@ def generar_predicciones():
                 "fecha": datetime.now().isoformat()
             }
             nuevas_predicciones.append(pred)
-
-            # Guardar en Supabase
             supabase.table("predictions").insert(pred).execute()
 
     return {"mensaje": "Predicciones guardadas", "total": len(nuevas_predicciones)}
 
 @app.put("/api/v1/predicciones/{id}")
 def actualizar_prediccion(id: str):
-    supabase.table("predictions").update({"verificado": True}).eq("id", id).execute()
+    response = supabase.table("predictions").update({"verificado": True}).eq("id", id).execute()
+    if not response:
+        raise HTTPException(status_code=404, detail="Predicción no encontrada")
     return {"mensaje": f"Predicción {id} actualizada"}
 
 if __name__ == "__main__":
