@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 import xgboost as xgb
 import numpy as np
 import pandas as pd
+from datetime import datetime
 
 # Cargar variables de entorno
 load_dotenv()
@@ -69,6 +70,45 @@ def get_predictions():
     df["prediccion"] = predictions
 
     return df.to_dict(orient="records")
+
+@app.post("/api/v1/generar_predicciones")
+def generar_y_guardar_predicciones():
+    """ Genera predicciones y las guarda en Supabase """
+
+    # Obtener datos de Supabase
+    response = supabase.table("matches").select("*").execute()
+    matches = response.data
+
+    if not matches:
+        return {"error": "No hay datos suficientes para hacer predicciones"}
+
+    # Convertir a DataFrame
+    df = pd.DataFrame(matches)
+    df.fillna(0, inplace=True)
+
+    # Variables de entrada
+    X = df[["score_home", "score_away"]]
+    y = np.random.randint(0, 2, size=len(df))  # Simulación de etiquetas
+
+    # Entrenar modelo XGBoost
+    model = xgb.XGBClassifier()
+    model.fit(X, y)
+
+    # Generar predicciones
+    df["prediccion"] = model.predict(X)
+    df["timestamp"] = datetime.utcnow().isoformat()
+
+    # Guardar en Supabase
+    for _, row in df.iterrows():
+        supabase.table("predictions").insert({
+            "match_id": row["id"],
+            "team_home": row["team_home"],
+            "team_away": row["team_away"],
+            "prediccion": int(row["prediccion"]),
+            "timestamp": row["timestamp"]
+        }).execute()
+
+    return {"message": "Predicciones generadas y guardadas en Supabase"}
 
 @app.get("/api/v1/ligas")
 async def get_ligas():
