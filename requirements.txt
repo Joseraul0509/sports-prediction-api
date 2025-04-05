@@ -4,5 +4,5 @@ python-dotenv>=1.0.0
 pandas>=2.0.0
 numpy>=1.24.0
 xgboost>=1.7.0
-supabase-py>=2.0.0
+supabase
 httpx>=0.24.0
