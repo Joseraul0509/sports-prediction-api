@@ -10,7 +10,6 @@ from datetime import datetime
 
 # Cargar variables de entorno
 load_dotenv()
-
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
@@ -20,12 +19,12 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 # Conectar con Supabase
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Crear la app de FastAPI
+# Crear FastAPI
 app = FastAPI()
 
 @app.get("/")
 def read_root():
-    return {"message": "API de predicciones deportivas en Render"}
+    return {"message": "API de predicciones deportivas con XGBoost"}
 
 @app.get("/api/v1/coincidencias")
 def get_matches():
@@ -34,97 +33,59 @@ def get_matches():
 
 @app.get("/api/v1/predicciones")
 def get_predictions():
-    """ Genera predicciones usando XGBoost con datos de Supabase """
-
-    # Obtener datos de Supabase
-    response = supabase.table("matches").select("*").execute()
-    matches = response.data
-
-    if not matches:
-        return {"error": "No hay datos suficientes para hacer predicciones"}
-
-    # Convertir a DataFrame
-    df = pd.DataFrame(matches)
-
-    # Verificar si las columnas necesarias existen
-    if "score_home" not in df.columns or "score_away" not in df.columns:
-        return {"error": "Faltan columnas necesarias en la base de datos"}
-
-    # Llenar valores nulos con 0
-    df.fillna(0, inplace=True)
-
-    # Variables de entrada (simples por ahora, mejoraremos después)
-    X = df[["score_home", "score_away"]]
-
-    # Etiquetas simuladas (0 o 1) - Esto luego lo cambiaremos con datos reales
-    y = np.random.randint(0, 2, size=len(df))
-
-    # Crear y entrenar modelo XGBoost (temporalmente con datos ficticios)
-    model = xgb.XGBClassifier()
-    model.fit(X, y)
-
-    # Generar predicciones
-    predictions = model.predict(X)
-
-    # Agregar las predicciones al DataFrame
-    df["prediccion"] = predictions
-
-    return df.to_dict(orient="records")
-
-@app.post("/api/v1/generar_predicciones")
-def generar_y_guardar_predicciones():
-    """ Genera predicciones y las guarda en Supabase """
-
-    # Obtener datos de Supabase
-    response = supabase.table("matches").select("*").execute()
-    matches = response.data
-
-    if not matches:
-        return {"error": "No hay datos suficientes para hacer predicciones"}
-
-    # Convertir a DataFrame
-    df = pd.DataFrame(matches)
-    df.fillna(0, inplace=True)
-
-    # Variables de entrada
-    X = df[["score_home", "score_away"]]
-    y = np.random.randint(0, 2, size=len(df))  # Simulación de etiquetas
-
-    # Entrenar modelo XGBoost
-    model = xgb.XGBClassifier()
-    model.fit(X, y)
-
-    # Generar predicciones
-    df["prediccion"] = model.predict(X)
-    df["timestamp"] = datetime.utcnow().isoformat()
-
-    # Guardar en Supabase
-    for _, row in df.iterrows():
-        supabase.table("predictions").insert({
-            "match_id": row["id"],
-            "team_home": row["team_home"],
-            "team_away": row["team_away"],
-            "prediccion": int(row["prediccion"]),
-            "timestamp": row["timestamp"]
-        }).execute()
-
-    return {"message": "Predicciones generadas y guardadas en Supabase"}
+    response = supabase.table("predictions").select("*").execute()
+    return response.data
 
 @app.get("/api/v1/ligas")
-async def get_ligas():
-    return {"message": "Lista de ligas"}
+def get_ligas():
+    return {"ligas": ["La Liga", "NBA", "MLB", "NHL"]}
 
 @app.get("/api/v1/equipos")
-async def get_equipos():
-    return {"message": "Lista de equipos"}
+def get_equipos():
+    return {"equipos": ["Real Madrid", "Lakers", "Yankees", "Maple Leafs"]}
 
 @app.post("/api/v1/predicciones")
-async def post_predicciones():
-    return {"message": "Predicción creada"}
+def generar_predicciones():
+    deportes = ["futbol", "nba", "mlb", "nhl"]
+    nuevas_predicciones = []
+
+    for deporte in deportes:
+        response = supabase.table("matches").select("*").eq("deporte", deporte).execute()
+        datos = response.data
+
+        if not datos:
+            continue
+
+        df = pd.DataFrame(datos)
+        if "score_home" not in df.columns or "score_away" not in df.columns:
+            continue
+
+        df.fillna(0, inplace=True)
+        X = df[["score_home", "score_away"]]
+        y = np.random.randint(0, 2, size=len(df))  # Simulación de etiquetas
+
+        model = xgb.XGBClassifier()
+        model.fit(X, y)
+        predicciones = model.predict(X)
+
+        for i, fila in df.iterrows():
+            pred = {
+                "deporte": deporte,
+                "match_id": fila.get("id"),
+                "prediccion": int(predicciones[i]),
+                "fecha": datetime.now().isoformat()
+            }
+            nuevas_predicciones.append(pred)
+
+            # Guardar en Supabase
+            supabase.table("predictions").insert(pred).execute()
+
+    return {"mensaje": "Predicciones guardadas", "total": len(nuevas_predicciones)}
 
 @app.put("/api/v1/predicciones/{id}")
-async def put_predicciones(id: int):
-    return {"message": f"Predicción {id} actualizada"}
+def actualizar_prediccion(id: str):
+    supabase.table("predictions").update({"verificado": True}).eq("id", id).execute()
+    return {"mensaje": f"Predicción {id} actualizada"}
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
