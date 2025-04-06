@@ -1,5 +1,5 @@
 import os
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from supabase import create_client, Client
 from dotenv import load_dotenv
@@ -14,7 +14,7 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
-    raise ValueError("Las claves de Supabase no están configuradas correctamente.")
+    raise ValueError("Faltan claves de Supabase en el archivo .env")
 
 # Conectar con Supabase
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -31,38 +31,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Simulación de API de partidos del día
+# Simulación de partidos por deporte
 def obtener_partidos_del_dia(deporte: str):
     hoy = datetime.now().isoformat()
-    if deporte == "nba":
-        return [{
-            "team_home": "Lakers", "team_away": "Warriors",
-            "score_home": 0, "score_away": 0,
-            "match_date": hoy
-        }]
-    elif deporte == "mlb":
-        return [{
-            "team_home": "Yankees", "team_away": "Red Sox",
-            "score_home": 0, "score_away": 0,
-            "match_date": hoy
-        }]
-    elif deporte == "nhl":
-        return [{
-            "team_home": "Maple Leafs", "team_away": "Bruins",
-            "score_home": 0, "score_away": 0,
-            "match_date": hoy
-        }]
-    elif deporte == "futbol":
-        return [{
-            "team_home": "Barcelona", "team_away": "Real Madrid",
-            "score_home": 0, "score_away": 0,
-            "match_date": hoy
-        }]
-    return []
+    partidos = {
+        "nba": [{"team_home": "Lakers", "team_away": "Warriors", "score_home": 0, "score_away": 0, "match_date": hoy}],
+        "mlb": [{"team_home": "Yankees", "team_away": "Red Sox", "score_home": 0, "score_away": 0, "match_date": hoy}],
+        "nhl": [{"team_home": "Maple Leafs", "team_away": "Bruins", "score_home": 0, "score_away": 0, "match_date": hoy}],
+        "futbol": [{"team_home": "Barcelona", "team_away": "Real Madrid", "score_home": 0, "score_away": 0, "match_date": hoy}]
+    }
+    return partidos.get(deporte, [])
 
 @app.get("/")
-def read_root():
-    return {"message": "API de predicciones deportivas con XGBoost"}
+def root():
+    return {"mensaje": "API de predicciones deportivas activada."}
 
 @app.post("/api/v1/auto")
 def cargar_y_predecir_automaticamente():
@@ -73,19 +55,18 @@ def cargar_y_predecir_automaticamente():
     for deporte in deportes:
         try:
             partidos = obtener_partidos_del_dia(deporte)
-
             for partido in partidos:
                 partido["deporte"] = deporte
-                response = supabase.table("matches").insert(partido).execute()
-                partido["id"] = response.data[0]["id"] if response.data else None
+                res = supabase.table("matches").insert(partido).execute()
+                partido["id"] = res.data[0]["id"] if res.data else None
                 partidos_guardados.append(partido)
         except Exception as e:
-            print(f"Error al guardar partido para {deporte}: {e}")
+            print(f"Error al guardar partido ({deporte}): {e}")
             continue
 
         try:
-            response = supabase.table("matches").select("*").eq("deporte", deporte).execute()
-            datos = response.data
+            res = supabase.table("matches").select("*").eq("deporte", deporte).execute()
+            datos = res.data
             if not datos:
                 continue
 
@@ -99,23 +80,20 @@ def cargar_y_predecir_automaticamente():
                 continue
 
             y = np.random.randint(0, 2, size=len(df))
-
             model = xgb.XGBClassifier(use_label_encoder=False, eval_metric="logloss")
             model.fit(X, y)
+
             predicciones = model.predict(X)
             probabilidades = model.predict_proba(X)
 
             for i, fila in df.iterrows():
                 confianza = float(np.max(probabilidades[i]) * 100)
                 pred = {
-                    "deporte": deporte,
+                    "sport": deporte,
                     "match_id": fila["id"],
-                    "prediccion": int(predicciones[i]),
+                    "prediction": int(predicciones[i]),
                     "confidence": confianza,
-                    "odds": 1.75,
-                    "type": "ML_PREDICTION",
-                    "fecha": datetime.now().isoformat(),
-                    "reasoning": "Predicción basada en rendimiento histórico"
+                    "created_at": datetime.now().isoformat()
                 }
 
                 try:
@@ -123,11 +101,12 @@ def cargar_y_predecir_automaticamente():
                     predicciones_guardadas.append(pred)
                 except Exception as e:
                     print(f"Error al guardar predicción: {e}")
+
         except Exception as e:
-            print(f"Error al generar predicciones para {deporte}: {e}")
+            print(f"Error en predicción automática ({deporte}): {e}")
 
     return {
-        "mensaje": "Proceso automático completado",
+        "mensaje": "Predicciones completadas",
         "partidos_guardados": len(partidos_guardados),
         "predicciones_guardadas": len(predicciones_guardadas)
     }
