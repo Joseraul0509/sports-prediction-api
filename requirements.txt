@@ -4,6 +4,8 @@ python-dotenv==1.0.0
 pandas==2.0.3
 numpy==1.24.4
 xgboost==1.7.6
-httpx
 requests==2.31.0
-supabase==2.2.1
+
+# Versión compatible de supabase y httpx (para evitar error proxy)
+supabase==2.0.5
+httpx==0.24.1
