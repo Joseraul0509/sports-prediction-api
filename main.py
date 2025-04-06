@@ -22,7 +22,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 # Crear FastAPI
 app = FastAPI()
 
-# CORS
+# Habilitar CORS para todas las rutas y orígenes
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -61,7 +61,7 @@ def cargar_y_predecir_automaticamente():
                 partido["id"] = res.data[0]["id"] if res.data else None
                 partidos_guardados.append(partido)
         except Exception as e:
-            print(f"Error al guardar partido ({deporte}): {e}")
+            print(f"[ERROR] Guardar partido ({deporte}): {e}")
             continue
 
         try:
@@ -72,15 +72,18 @@ def cargar_y_predecir_automaticamente():
 
             df = pd.DataFrame(datos)
             if not {"score_home", "score_away", "id"}.issubset(df.columns):
+                print(f"[WARNING] Datos incompletos para {deporte}")
                 continue
 
             df.fillna(0, inplace=True)
             X = df[["score_home", "score_away"]]
+
             if X.empty:
+                print(f"[WARNING] No hay datos para entrenar en {deporte}")
                 continue
 
-            y = np.random.randint(0, 2, size=len(df))
-            model = xgb.XGBClassifier(use_label_encoder=False, eval_metric="logloss")
+            y = np.random.randint(0, 2, size=len(df))  # Simulación
+            model = xgb.XGBClassifier(eval_metric="logloss")
             model.fit(X, y)
 
             predicciones = model.predict(X)
@@ -100,10 +103,10 @@ def cargar_y_predecir_automaticamente():
                     supabase.table("predictions").insert(pred).execute()
                     predicciones_guardadas.append(pred)
                 except Exception as e:
-                    print(f"Error al guardar predicción: {e}")
+                    print(f"[ERROR] Guardar predicción: {e}")
 
         except Exception as e:
-            print(f"Error en predicción automática ({deporte}): {e}")
+            print(f"[ERROR] Predicción automática ({deporte}): {e}")
 
     return {
         "mensaje": "Predicciones completadas",
