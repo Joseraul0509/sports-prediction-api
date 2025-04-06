@@ -2,7 +2,6 @@ import os
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import uvicorn
 from supabase import create_client, Client
 from dotenv import load_dotenv
 import xgboost as xgb
@@ -39,8 +38,13 @@ def read_root():
 
 @app.get("/api/v1/coincidencias")
 def get_matches():
-    response = supabase.table("matches").select("*").execute()
-    return response.data
+    try:
+        response = supabase.table("matches").select("*").execute()
+        if response.data is None:
+            raise HTTPException(status_code=404, detail="No se encontraron coincidencias")
+        return response.data
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error al obtener coincidencias: {str(e)}")
 
 @app.get("/api/v1/predicciones")
 def get_predictions():
@@ -118,10 +122,6 @@ def generar_predicciones():
 @app.put("/api/v1/predicciones/{id}")
 def actualizar_prediccion(id: str):
     response = supabase.table("predictions").update({"verificado": True}).eq("id", id).execute()
-    if not response:
+    if not response.data:
         raise HTTPException(status_code=404, detail="Predicción no encontrada")
     return {"mensaje": f"Predicción {id} actualizada"}
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
