@@ -3,7 +3,7 @@ import requests
 import os
 
 # Cargar variables desde entorno
-PREDICTION_URL = os.getenv("PREDICTION_URL", "https://sports-prediction-api-2a0q.onrender.com/api/v1/predicciones")
+PREDICTION_URL = os.getenv("PREDICTION_URL", "https://sports-prediction-api-j44u.onrender.com/api/v1/predicciones")
 API_KEY = os.getenv("API_KEY")  # si usas autenticación opcional
 
 def main():
