@@ -24,7 +24,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 # Crear FastAPI
 app = FastAPI()
 
-# Habilitar CORS para permitir conexiones desde Hostinger u otros dominios
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -77,30 +77,41 @@ def generar_predicciones():
             continue
 
         df = pd.DataFrame(datos)
-        if "score_home" not in df.columns or "score_away" not in df.columns:
+
+        if not {"score_home", "score_away", "id"}.issubset(df.columns):
             continue
 
         df.fillna(0, inplace=True)
         X = df[["score_home", "score_away"]]
+
+        if X.empty:
+            continue
+
         y = np.random.randint(0, 2, size=len(df))
 
         model = xgb.XGBClassifier(use_label_encoder=False, eval_metric="logloss")
         model.fit(X, y)
         predicciones = model.predict(X)
+        probabilidades = model.predict_proba(X)
 
         for i, fila in df.iterrows():
+            confianza = float(np.max(probabilidades[i]) * 100)
             pred = {
                 "deporte": deporte,
-                "match_id": fila.get("id"),
+                "match_id": fila["id"],
                 "prediccion": int(predicciones[i]),
-                "confidence": float(max(model.predict_proba([X.iloc[i]])[0]) * 100),
+                "confidence": confianza,
                 "odds": 1.75,
                 "type": "ML_PREDICTION",
                 "fecha": datetime.now().isoformat(),
                 "reasoning": "Predicción basada en rendimiento histórico"
             }
-            nuevas_predicciones.append(pred)
-            supabase.table("predictions").insert(pred).execute()
+
+            try:
+                supabase.table("predictions").insert(pred).execute()
+                nuevas_predicciones.append(pred)
+            except Exception as e:
+                print(f"Error al guardar predicción: {e}")
 
     return {"mensaje": "Predicciones guardadas", "total": len(nuevas_predicciones)}
 
