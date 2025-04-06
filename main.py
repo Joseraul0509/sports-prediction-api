@@ -12,17 +12,16 @@ from datetime import datetime
 load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise ValueError("Faltan claves de Supabase en el archivo .env")
 
-# Conectar con Supabase
+# Conectar Supabase
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # Crear FastAPI
 app = FastAPI()
 
-# Habilitar CORS para todas las rutas y orígenes
+# Habilitar CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -77,12 +76,15 @@ def cargar_y_predecir_automaticamente():
 
             df.fillna(0, inplace=True)
             X = df[["score_home", "score_away"]]
-
-            if X.empty:
-                print(f"[WARNING] No hay datos para entrenar en {deporte}")
+            if X.empty or len(X) < 2:
+                print(f"[WARNING] No hay suficientes datos para entrenar en {deporte}")
                 continue
 
-            y = np.random.randint(0, 2, size=len(df))  # Simulación
+            y = np.random.randint(0, 2, size=len(df))
+            if len(set(y)) < 2:
+                print(f"[WARNING] Clases insuficientes en {deporte}, se cancela entrenamiento")
+                continue
+
             model = xgb.XGBClassifier(eval_metric="logloss")
             model.fit(X, y)
 
