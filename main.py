@@ -1,6 +1,6 @@
 import os
 import time
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from supabase import create_client, Client
 from dotenv import load_dotenv
@@ -8,21 +8,21 @@ import xgboost as xgb
 import numpy as np
 import pandas as pd
 from datetime import datetime
+import requests
 
-# Cargar variables de entorno
 load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+X_AUTH_TOKEN = os.getenv("X_AUTH_TOKEN")
+API_FUTBOL_KEY = os.getenv("API_FUTBOL_KEY")
+SCRAPER_API_URL = os.getenv("SCRAPER_API_URL")
+
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise ValueError("Faltan claves de Supabase en el archivo .env")
 
-# Conectar Supabase
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-# Crear FastAPI
 app = FastAPI()
 
-# Habilitar CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -31,103 +31,89 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Simulación de partidos por deporte
-def obtener_partidos_del_dia(deporte: str):
-    hoy = datetime.now().isoformat()
-    partidos = {
-        "nba": [{"team_home": "Lakers", "team_away": "Warriors", "score_home": 0, "score_away": 0, "match_date": hoy}],
-        "mlb": [{"team_home": "Yankees", "team_away": "Red Sox", "score_home": 0, "score_away": 0, "match_date": hoy}],
-        "nhl": [{"team_home": "Maple Leafs", "team_away": "Bruins", "score_home": 0, "score_away": 0, "match_date": hoy}],
-        "futbol": [{"team_home": "Barcelona", "team_away": "Real Madrid", "score_home": 0, "score_away": 0, "match_date": hoy}]
-    }
-    return partidos.get(deporte, [])
+# Simulador inicial - reemplazar por funciones reales
+
+def obtener_partidos_externos():
+    partidos = []
+    headers = {"X-Auth-Token": X_AUTH_TOKEN}
+    urls_openliga = [
+        "https://api.openligadb.de/getmatchdata/dfb/2024/5",
+        "https://api.openligadb.de/getmatchdata/bl2/2024/28",
+        "https://api.openligadb.de/getmatchdata/bl3/2024/31",
+        "https://api.openligadb.de/getmatchdata/ucl24/2024/12",
+        "https://api.openligadb.de/getmatchdata/bl1/2024/28",
+        "https://api.openligadb.de/getmatchdata/ucl2024/2024/4",
+        "https://api.openligadb.de/getmatchdata/uel24/2024/12",
+    ]
+    for url in urls_openliga:
+        try:
+            res = requests.get(url)
+            data = res.json()
+            for match in data:
+                partidos.append({
+                    "team_home": match["Team1"]["TeamName"],
+                    "team_away": match["Team2"]["TeamName"],
+                    "score_home": match.get("MatchResults", [{}])[0].get("PointsTeam1", 0),
+                    "score_away": match.get("MatchResults", [{}])[0].get("PointsTeam2", 0),
+                    "match_date": match.get("MatchDateTime", datetime.now().isoformat()),
+                    "deporte": "futbol",
+                    "liga": match.get("LeagueName", "")
+                })
+        except:
+            continue
+    return partidos
 
 @app.get("/")
 def root():
-    return {"mensaje": "API de predicciones deportivas activada."}
+    return {"mensaje": "API de predicciones deportivas activa."}
 
 @app.post("/api/v1/auto")
-def cargar_y_predecir_automaticamente():
-    deportes = ["futbol", "nba", "mlb", "nhl"]
+def generar_predicciones():
+    partidos = obtener_partidos_externos()
     partidos_guardados = []
     predicciones_guardadas = []
 
-    for deporte in deportes:
+    for partido in partidos:
         try:
-            partidos = obtener_partidos_del_dia(deporte)
-            for partido in partidos:
-                partido["deporte"] = deporte
-                try:
-                    res = supabase.table("matches").insert(partido).execute()
-                    time.sleep(0.3)  # Pausa para evitar sobrecarga
-                    partido["id"] = res.data[0]["id"] if res.data else None
-                    partidos_guardados.append(partido)
-                except Exception as e:
-                    print(f"[ERROR] Guardar partido ({deporte}): {e}")
-        except Exception as e:
-            print(f"[ERROR] Obtener partidos ({deporte}): {e}")
-            continue
-
-        try:
-            res = supabase.table("matches").select("*").eq("deporte", deporte).execute()
-            datos = res.data
-            if not datos:
+            res = supabase.table("matches").insert(partido).execute()
+            time.sleep(0.2)
+            partido_id = res.data[0]["id"] if res.data else None
+            if not partido_id:
                 continue
 
-            df = pd.DataFrame(datos)
-            if not {"score_home", "score_away", "id"}.issubset(df.columns):
-                print(f"[WARNING] Datos incompletos para {deporte}")
-                continue
-
-            df.fillna(0, inplace=True)
-            X = df[["score_home", "score_away"]]
-            if X.empty or len(X) < 2:
-                print(f"[WARNING] No hay suficientes datos para entrenar en {deporte}")
-                continue
-
-            y = np.random.randint(0, 2, size=len(df))
-            if len(set(y)) < 2:
-                print(f"[WARNING] Clases insuficientes en {deporte}, se cancela entrenamiento")
-                continue
-
+            X = np.array([[partido["score_home"], partido["score_away"]]])
+            y = np.array([1])
             model = xgb.XGBClassifier(eval_metric="logloss")
             model.fit(X, y)
+            pred = model.predict(X)[0]
+            prob = float(model.predict_proba(X)[0][pred] * 100)
 
-            predicciones = model.predict(X)
-            probabilidades = model.predict_proba(X)
+            # Scraping de cuotas en tiempo real
+            cuotas = requests.get(SCRAPER_API_URL, params={
+                "deporte": partido["deporte"],
+                "local": partido["team_home"],
+                "visitante": partido["team_away"]
+            }).json()
 
-            for i, fila in df.iterrows():
-                confianza = float(np.max(probabilidades[i]) * 100)
-                pred = {
-                    "sport": deporte,
-                    "match_id": fila["id"],
-                    "prediction": int(predicciones[i]),
-                    "confidence": confianza,
-                    "created_at": datetime.now().isoformat()
-                }
-
-                try:
-                    supabase.table("predictions").insert(pred).execute()
-                    time.sleep(0.2)  # Pausa para evitar desconexión
-                    predicciones_guardadas.append(pred)
-                except Exception as e:
-                    print(f"[ERROR] Guardar predicción: {e}")
-
+            prediccion = {
+                "match_id": partido_id,
+                "sport": partido["deporte"],
+                "prediction": int(pred),
+                "confidence": prob,
+                "odds": cuotas.get("mejor_cuota", 1.5),
+                "type": "ganador",
+                "created_at": datetime.now().isoformat()
+            }
+            supabase.table("predictions").insert(prediccion).execute()
+            time.sleep(0.2)
+            partidos_guardados.append(partido)
+            predicciones_guardadas.append(prediccion)
         except Exception as e:
-            print(f"[ERROR] Predicción automática ({deporte}): {e}")
+            print("Error en predicción:", e)
+            continue
 
     return {
         "mensaje": "Predicciones completadas",
         "partidos_guardados": len(partidos_guardados),
         "predicciones_guardadas": len(predicciones_guardadas)
     }
-
-@app.post("/api/v1/recargar-cache")
-def recargar_cache_supabase():
-    try:
-        resultado = supabase.rpc("execute_sql", {
-            "sql": "comment on table predictions is 'Recarga forzada desde API';"
-        }).execute()
-        return {"mensaje": "Solicitud para recargar cache enviada correctamente."}
-    except Exception as e:
-        return {"error": f"Error al forzar recarga del esquema: {e}"}
