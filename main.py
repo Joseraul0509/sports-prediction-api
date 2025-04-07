@@ -115,3 +115,14 @@ def cargar_y_predecir_automaticamente():
         "partidos_guardados": len(partidos_guardados),
         "predicciones_guardadas": len(predicciones_guardadas)
     }
+
+@app.post("/api/v1/recargar-cache")
+def recargar_cache_supabase():
+    try:
+        # Ejecutar una modificación leve en Supabase para forzar recarga del schema cache
+        resultado = supabase.rpc("execute_sql", {
+            "sql": "comment on table predictions is 'Recarga forzada desde API';"
+        }).execute()
+        return {"mensaje": "Solicitud para recargar cache enviada correctamente."}
+    except Exception as e:
+        return {"error": f"Error al forzar recarga del esquema: {e}"}
