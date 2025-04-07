@@ -1,4 +1,5 @@
 import os
+import time
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from supabase import create_client, Client
@@ -56,11 +57,15 @@ def cargar_y_predecir_automaticamente():
             partidos = obtener_partidos_del_dia(deporte)
             for partido in partidos:
                 partido["deporte"] = deporte
-                res = supabase.table("matches").insert(partido).execute()
-                partido["id"] = res.data[0]["id"] if res.data else None
-                partidos_guardados.append(partido)
+                try:
+                    res = supabase.table("matches").insert(partido).execute()
+                    time.sleep(0.3)  # Pausa para evitar sobrecarga
+                    partido["id"] = res.data[0]["id"] if res.data else None
+                    partidos_guardados.append(partido)
+                except Exception as e:
+                    print(f"[ERROR] Guardar partido ({deporte}): {e}")
         except Exception as e:
-            print(f"[ERROR] Guardar partido ({deporte}): {e}")
+            print(f"[ERROR] Obtener partidos ({deporte}): {e}")
             continue
 
         try:
@@ -103,6 +108,7 @@ def cargar_y_predecir_automaticamente():
 
                 try:
                     supabase.table("predictions").insert(pred).execute()
+                    time.sleep(0.2)  # Pausa para evitar desconexión
                     predicciones_guardadas.append(pred)
                 except Exception as e:
                     print(f"[ERROR] Guardar predicción: {e}")
@@ -119,7 +125,6 @@ def cargar_y_predecir_automaticamente():
 @app.post("/api/v1/recargar-cache")
 def recargar_cache_supabase():
     try:
-        # Ejecutar una modificación leve en Supabase para forzar recarga del schema cache
         resultado = supabase.rpc("execute_sql", {
             "sql": "comment on table predictions is 'Recarga forzada desde API';"
         }).execute()
