@@ -1,8 +1,0 @@
-fastapi==0.95.1
-uvicorn==0.20.0
-python-dotenv==1.0.0
-xgboost==1.7.5
-pandas==1.5.3
-scikit-learn==1.2.2
-httpx==0.27.0
-supabase==2.15.0
