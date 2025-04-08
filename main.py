@@ -7,7 +7,10 @@ import os
 import time
 from datetime import datetime
 import pytz
+import requests
+from pipeline_predictor import procesar_partidos
 
+# Cargar las variables de entorno
 load_dotenv()
 
 url = os.getenv("SUPABASE_URL")
@@ -115,3 +118,15 @@ def test_guardar():
     }
     guardar_prediccion(prediccion_test)
     return {"message": "Test ejecutado"}
+
+# -----------------------
+# Ejecutar la predicción en background
+# -----------------------
+
+@app.post("/ejecutar_predicciones")
+def ejecutar_predicciones():
+    try:
+        procesar_partidos()  # Llama la función del pipeline
+        return {"message": "Predicciones procesadas correctamente."}
+    except Exception as e:
+        return HTTPException(status_code=500, detail=str(e))
