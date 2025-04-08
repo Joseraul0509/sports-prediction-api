@@ -1,11 +1,19 @@
 import xgboost as xgb
 import pandas as pd
-import requests
 from datetime import datetime
+import os
+from dotenv import load_dotenv
 
-# Carga el modelo (ajusta el path si es necesario)
+# Cargar las variables de entorno
+load_dotenv()
+
+# Cargar el modelo
+model_path = "modelo_entrenado.json"
+if not os.path.exists(model_path):
+    raise FileNotFoundError(f"Modelo no encontrado en {model_path}")
+
 modelo = xgb.XGBClassifier()
-modelo.load_model("modelo_entrenado.json")
+modelo.load_model(model_path)
 
 # Datos simulados para probar (luego esto vendrá de tu base de datos)
 datos_partido = pd.DataFrame([{
@@ -37,6 +45,7 @@ payload = {
 }
 
 # Enviar a la API
+import requests
 res = requests.post("http://localhost:8000/guardar_prediccion", json=payload)
 
 print("Estado:", res.status_code)
