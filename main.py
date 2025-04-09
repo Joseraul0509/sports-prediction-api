@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from datetime import datetime
 import os
 import sys
+from pipeline_predictor import procesar_partidos
 
 # Cargar variables de entorno
 load_dotenv()
@@ -18,7 +19,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 app = FastAPI()
 
-# Configurar CORS
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -27,7 +28,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Validación con Pydantic
+# Estructura de datos
 class DeporteInput(BaseModel):
     deporte: str
 
@@ -43,12 +44,10 @@ class Prediccion(BaseModel):
     pronostico_3: str
     confianza_3: float
 
-# Endpoint raíz
 @app.get("/")
 def root():
     return {"mensaje": "API de Predicción Deportiva funcionando."}
 
-# Endpoint para consultar deportes disponibles
 @app.post("/deportes_disponibles")
 def deportes_disponibles(input: DeporteInput):
     try:
@@ -60,7 +59,6 @@ def deportes_disponibles(input: DeporteInput):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# Función para guardar predicciones (evita duplicados)
 def guardar_prediccion(prediccion: dict):
     try:
         existe = supabase.table("predicciones").select("*").match({
@@ -77,7 +75,6 @@ def guardar_prediccion(prediccion: dict):
     except Exception as e:
         print("Error al guardar predicción:", str(e))
 
-# Endpoint para recibir y guardar predicción vía API
 @app.post("/guardar_prediccion")
 def endpoint_guardar_prediccion(prediccion: Prediccion):
     try:
@@ -86,7 +83,6 @@ def endpoint_guardar_prediccion(prediccion: Prediccion):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# Endpoint de prueba para guardar predicción
 @app.get("/test_guardar")
 def test_guardar():
     prediccion_test = {
@@ -104,8 +100,6 @@ def test_guardar():
     guardar_prediccion(prediccion_test)
     return {"message": "Test ejecutado"}
 
-# Endpoint para ejecutar el pipeline de predicción
-from pipeline_predictor import procesar_partidos
 @app.post("/ejecutar_predicciones")
 def ejecutar_predicciones():
     try:
