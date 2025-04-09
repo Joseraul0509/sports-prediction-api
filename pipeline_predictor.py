@@ -1,11 +1,37 @@
+import os
+from datetime import datetime
 import pandas as pd
 import xgboost as xgb
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
+from supabase import create_client
 
-# 1. Función para obtener datos simulados de entrenamiento
+# Conexión a Supabase
+url = os.getenv("SUPABASE_URL")
+key = os.getenv("SUPABASE_KEY")
+supabase = create_client(url, key)
+
+# Función para obtener datos reales (en producción, conecta a APIs deportivas)
+def obtener_datos_actualizados():
+    # Ejemplo de datos obtenidos; reemplazar por datos de APIs reales
+    return [
+        {
+            "nombre_partido": "Arsenal vs Chelsea",
+            "liga": "Premier League",
+            "deporte": "futbol",
+            "goles_local_prom": 1.8,
+            "goles_visita_prom": 1.2,
+            "racha_local": 4,
+            "racha_visita": 2,
+            "clima": 1,
+            "importancia_partido": 3,
+            "hora": datetime.utcnow().isoformat()
+        }
+    ]
+
+# Función para obtener datos de entrenamiento históricos o simulados
 def obtener_datos_entrenamiento():
-    # Clases: 0 = Gana Local, 1 = Empate, 2 = Gana Visitante
+    # Simulación de datos: 0 = Gana Local, 1 = Empate, 2 = Gana Visitante
     return pd.DataFrame([
         {"goles_local_prom": 1.5, "goles_visita_prom": 1.0, "racha_local": 3, "racha_visita": 2, "clima": 1, "importancia_partido": 2, "resultado": 0},
         {"goles_local_prom": 1.2, "goles_visita_prom": 1.2, "racha_local": 2, "racha_visita": 2, "clima": 1, "importancia_partido": 2, "resultado": 1},
@@ -15,7 +41,7 @@ def obtener_datos_entrenamiento():
         {"goles_local_prom": 1.3, "goles_visita_prom": 1.6, "racha_local": 2, "racha_visita": 3, "clima": 2, "importancia_partido": 2, "resultado": 2}
     ])
 
-# 2. Función para entrenar el modelo
+# Entrenar el modelo XGBoost con datos históricos
 def entrenar_modelo():
     datos = obtener_datos_entrenamiento()
     X = datos.drop("resultado", axis=1)
@@ -23,25 +49,61 @@ def entrenar_modelo():
 
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-    modelo = xgb.XGBClassifier(use_label_encoder=False, eval_metric='mlogloss', num_class=3)
-    modelo.fit(X_train, y_train)
+    model = xgb.XGBClassifier(use_label_encoder=False, eval_metric='mlogloss', num_class=3)
+    model.fit(X_train, y_train)
 
-    y_pred = modelo.predict(X_test)
+    y_pred = model.predict(X_test)
     precision = accuracy_score(y_test, y_pred)
     print(f"Precisión del modelo: {precision:.2f}")
 
-    return modelo
+    return model
 
-# 3. Función para predecir el resultado de un partido
+# Predecir el resultado para un partido usando el modelo entrenado
 def predecir_resultado(modelo, datos_partido):
-    df = pd.DataFrame([datos_partido])
+    df = pd.DataFrame([{
+        "goles_local_prom": datos_partido["goles_local_prom"],
+        "goles_visita_prom": datos_partido["goles_visita_prom"],
+        "racha_local": datos_partido["racha_local"],
+        "racha_visita": datos_partido["racha_visita"],
+        "clima": datos_partido["clima"],
+        "importancia_partido": datos_partido["importancia_partido"]
+    }])
     pred = modelo.predict(df)[0]
 
-    resultados = {
+    opciones = {
         0: ("Gana Local", 0.70),
         1: ("Empate", 0.65),
         2: ("Gana Visitante", 0.68)
     }
+    return opciones.get(pred, ("Indefinido", 0.0))
 
-    texto_resultado, probabilidad = resultados.get(pred, ("Resultado desconocido", 0.0))
-    return texto_resultado, probabilidad
+# Actualiza los datos de partidos desde fuentes reales
+def actualizar_datos_partidos():
+    nuevos_datos = obtener_datos_actualizados()
+    for partido in nuevos_datos:
+        supabase.table("partidos").upsert(partido, on_conflict=["nombre_partido", "hora"]).execute()
+    return {"status": "Datos actualizados correctamente"}
+
+# Procesa los partidos: entrena el modelo y genera predicciones para cada partido
+def procesar_partidos():
+    modelo = entrenar_modelo()
+    partidos = obtener_datos_actualizados()  # En producción, puedes extraer los datos de Supabase o de una API
+
+    for partido in partidos:
+        resultado, confianza = predecir_resultado(modelo, partido)
+        prediccion = {
+            "deporte": partido["deporte"],
+            "liga": partido["liga"],
+            "partido": partido["nombre_partido"],
+            "hora": partido["hora"],
+            "pronostico_1": resultado,
+            "confianza_1": confianza,
+            "pronostico_2": "Menos de 2.5 goles",  # Ejemplo; personaliza según tus algoritmos
+            "confianza_2": 0.70,
+            "pronostico_3": "Ambos no anotan",
+            "confianza_3": 0.65
+        }
+        supabase.table("predicciones").upsert(prediccion, on_conflict=["partido", "hora"]).execute()
+        print("Predicción guardada para:", prediccion["partido"])
+
+    return {"message": "Predicciones generadas correctamente"}
