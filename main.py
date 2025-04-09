@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from datetime import datetime
 import os
 import sys
-from pipeline_predictor import procesar_partidos
+from pipeline_predictor import procesar_partidos, actualizar_datos_partidos
 
 # Cargar variables de entorno
 load_dotenv()
@@ -19,7 +19,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 app = FastAPI()
 
-# CORS
+# Configurar CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -28,7 +28,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Estructura de datos
+# Estructura de datos para validación
 class DeporteInput(BaseModel):
     deporte: str
 
@@ -61,6 +61,7 @@ def deportes_disponibles(input: DeporteInput):
 
 def guardar_prediccion(prediccion: dict):
     try:
+        # Evitar duplicados: si ya existe un registro para el mismo partido y hora, no se inserta.
         existe = supabase.table("predicciones").select("*").match({
             "partido": prediccion["partido"],
             "liga": prediccion["liga"],
@@ -85,11 +86,12 @@ def endpoint_guardar_prediccion(prediccion: Prediccion):
 
 @app.get("/test_guardar")
 def test_guardar():
+    # Endpoint para prueba manual
     prediccion_test = {
         "deporte": "futbol",
         "liga": "Premier League",
         "partido": "Arsenal vs Chelsea",
-        "hora": "2025-04-08 15:00",
+        "hora": datetime.utcnow().isoformat(),
         "pronostico_1": "Gana Arsenal",
         "confianza_1": 0.82,
         "pronostico_2": "Menos de 2.5 goles",
@@ -103,6 +105,8 @@ def test_guardar():
 @app.post("/ejecutar_predicciones")
 def ejecutar_predicciones():
     try:
+        # Actualiza datos de partidos y genera predicciones
+        actualizar_datos_partidos()  # Actualiza datos reales desde una API externa (implementar en futuro)
         procesar_partidos()
         return {"message": "Predicciones procesadas correctamente."}
     except Exception as e:
