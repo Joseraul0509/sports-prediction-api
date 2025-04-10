@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from datetime import datetime
 import os
 import sys
-from pipeline_predictor import procesar_partidos, actualizar_datos_partidos
+from pipeline_predictor import procesar_predicciones, actualizar_datos_partidos
 
 # Cargar variables de entorno
 load_dotenv()
@@ -15,11 +15,12 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 if not SUPABASE_URL or not SUPABASE_KEY:
     sys.exit("Error: Faltan variables de entorno en .env")
 
+# Inicializar Supabase
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 app = FastAPI()
 
-# Configuración CORS
+# Configuración CORS para permitir cualquier origen
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -61,7 +62,7 @@ def deportes_disponibles(input: DeporteInput):
 
 def guardar_prediccion(prediccion: dict):
     try:
-        # Evitar duplicados: si ya existe registro para el mismo partido y hora, no lo inserta.
+        # Evitar duplicados: se detecta mediante partido, liga y hora.
         existe = supabase.table("predicciones").select("*").match({
             "partido": prediccion["partido"],
             "liga": prediccion["liga"],
@@ -103,10 +104,10 @@ def test_guardar():
 @app.post("/ejecutar_predicciones")
 def ejecutar_predicciones():
     try:
-        # Actualiza datos de partidos desde APIs deportivas reales
+        # Actualiza los datos de partidos desde las APIs deportivas
         actualizar_datos_partidos()
-        # Procesa partidos: entrena el modelo y genera predicciones
-        procesar_partidos()
+        # Procesa los partidos: entrena el modelo y genera predicciones
+        procesar_predicciones()
         return {"message": "Predicciones procesadas correctamente."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
