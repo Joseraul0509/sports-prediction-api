@@ -19,7 +19,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 app = FastAPI()
 
-# Configurar CORS
+# Configuración CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -28,7 +28,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Estructura de datos para validación
+# Modelo de datos para validación
 class DeporteInput(BaseModel):
     deporte: str
 
@@ -61,13 +61,12 @@ def deportes_disponibles(input: DeporteInput):
 
 def guardar_prediccion(prediccion: dict):
     try:
-        # Evitar duplicados: si ya existe un registro para el mismo partido y hora, no se inserta.
+        # Evitar duplicados: si ya existe registro para el mismo partido y hora, no lo inserta.
         existe = supabase.table("predicciones").select("*").match({
             "partido": prediccion["partido"],
             "liga": prediccion["liga"],
             "hora": prediccion["hora"]
         }).execute()
-
         if not existe.data:
             supabase.table("predicciones").insert(prediccion).execute()
             print("Predicción guardada:", prediccion["partido"])
@@ -86,7 +85,6 @@ def endpoint_guardar_prediccion(prediccion: Prediccion):
 
 @app.get("/test_guardar")
 def test_guardar():
-    # Endpoint para prueba manual
     prediccion_test = {
         "deporte": "futbol",
         "liga": "Premier League",
@@ -105,8 +103,9 @@ def test_guardar():
 @app.post("/ejecutar_predicciones")
 def ejecutar_predicciones():
     try:
-        # Actualiza datos de partidos y genera predicciones
-        actualizar_datos_partidos()  # Actualiza datos reales desde una API externa (implementar en futuro)
+        # Actualiza datos de partidos desde APIs deportivas reales
+        actualizar_datos_partidos()
+        # Procesa partidos: entrena el modelo y genera predicciones
         procesar_partidos()
         return {"message": "Predicciones procesadas correctamente."}
     except Exception as e:
