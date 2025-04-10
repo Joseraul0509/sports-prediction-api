@@ -163,4 +163,5 @@ def predecir_resultado(modelo, datos_partido):
     opciones = {
         0: ("Gana Local", 0.70),
         1: ("Empate", 0.65),
+    }
        
