@@ -210,8 +210,16 @@ def actualizar_datos_partidos():
 def procesar_predicciones():
     model = entrenar_modelo()
     partidos = obtener_datos_actualizados()  # En producción, se pueden extraer de Supabase o las APIs directamente
-
     for partido in partidos:
+        # Convertir "hora" a datetime si es string
+        hora_valor = partido["hora"]
+        if isinstance(hora_valor, str):
+            try:
+                hora_valor = datetime.fromisoformat(hora_valor)
+            except Exception as ex:
+                print(f"Error al convertir hora en predicción: {ex}")
+                hora_valor = datetime.utcnow()
+        partido["hora"] = hora_valor
         resultado, confianza = predecir_resultado(model, partido)
         prediccion = {
             "deporte": partido["deporte"],
@@ -220,13 +228,12 @@ def procesar_predicciones():
             "hora": partido["hora"],
             "pronostico_1": resultado,
             "confianza_1": confianza,
-            "pronostico_2": "Menos de 2.5 goles",  # Ejemplo: personalizar según tus reglas
+            "pronostico_2": "Menos de 2.5 goles",  # Ejemplo; personaliza según tus reglas
             "confianza_2": 0.70,
             "pronostico_3": "Ambos no anotan",
             "confianza_3": 0.65
         }
-        # Upsert en la tabla "predicciones" usando on_conflict ["partido", "hora"]
+        # Upsert en la tabla "predicciones" usando on_conflict sobre ["partido", "hora"]
         supabase.table("predicciones").upsert(prediccion, on_conflict=["partido", "hora"]).execute()
         print("Predicción guardada para:", prediccion["partido"])
-
     return {"message": "Predicciones generadas correctamente"}
