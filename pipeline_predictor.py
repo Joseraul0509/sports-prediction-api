@@ -32,6 +32,7 @@ BALLDONTLIE_BASE_URL = "https://www.balldontlie.io/api/v1"
 
 def obtener_datos_futbol():
     datos = []
+    # Obtener datos de OpenLigaDB:
     for endpoint in OPENLIGADB_ENDPOINTS:
         try:
             resp = requests.get(endpoint, timeout=10)
@@ -47,11 +48,11 @@ def obtener_datos_futbol():
                         "racha_visita": 2,
                         "clima": 1,
                         "importancia_partido": 3,
-                        # Convertir la hora a ISO y luego formatearla
                         "hora": partido.get("MatchDateTime", datetime.utcnow().isoformat())
                     })
         except Exception as e:
             print("Error en OpenLigaDB:", e)
+    # Obtener datos de Football-data.org:
     headers = {"X-Auth-Token": os.getenv("FOOTBALL_DATA_TOKEN")}
     try:
         resp = requests.get(FOOTBALL_DATA_ENDPOINT, headers=headers, timeout=10)
@@ -78,7 +79,7 @@ def obtener_datos_balldontlie(deporte):
     if deporte.upper() == "NBA":
         try:
             url = f"{BALLDONTLIE_BASE_URL}/games"
-            params = {"per_page": 20}
+            params = {"per_page": 20}  # Obtener algunos partidos recientes
             resp = requests.get(url, params=params, timeout=10)
             if resp.status_code == 200:
                 for game in resp.json().get("data", []):
@@ -97,6 +98,7 @@ def obtener_datos_balldontlie(deporte):
         except Exception as e:
             print("Error en balldontlie (NBA):", e)
     else:
+        # Para MLB y NHL, se simulan datos
         datos.append({
             "nombre_partido": f"Simulado {deporte} - Equipo A vs Equipo B",
             "liga": deporte,
@@ -113,7 +115,9 @@ def obtener_datos_balldontlie(deporte):
 
 def obtener_datos_actualizados():
     datos = []
+    # Datos para fútbol
     datos.extend(obtener_datos_futbol())
+    # Datos para NBA, MLB y NHL
     for deporte in ["NBA", "MLB", "NHL"]:
         datos.extend(obtener_datos_balldontlie(deporte))
     return datos if datos else [{
@@ -169,6 +173,7 @@ def predecir_resultado(modelo, datos_partido):
 def actualizar_datos_partidos():
     nuevos_datos = obtener_datos_actualizados()
     for partido in nuevos_datos:
+        # Convertir "hora" a datetime si es string
         hora_valor = partido["hora"]
         if isinstance(hora_valor, str):
             try:
@@ -176,7 +181,7 @@ def actualizar_datos_partidos():
             except Exception as ex:
                 print(f"Error al convertir hora: {ex}")
                 hora_valor = datetime.utcnow()
-        # Convertir a cadena en formato "YYYY-MM-DD HH:MM:SS" (compatible con PostgreSQL)
+        # Convertir a string compatible con PostgreSQL (por ejemplo, formato ISO)
         partido["hora"] = hora_valor.strftime("%Y-%m-%d %H:%M:%S")
         # Upsert en la tabla "partidos" usando on_conflict sobre ["nombre_partido", "hora"]
         supabase.table("partidos").upsert(partido, on_conflict=["nombre_partido", "hora"]).execute()
@@ -186,6 +191,7 @@ def procesar_predicciones():
     model = entrenar_modelo()
     partidos = obtener_datos_actualizados()
     for partido in partidos:
+        # Convertir "hora" a datetime si es string y luego a cadena formateada
         hora_valor = partido["hora"]
         if isinstance(hora_valor, str):
             try:
@@ -204,7 +210,7 @@ def procesar_predicciones():
             "hora": partido["hora"],
             "pronostico_1": resultado,
             "confianza_1": confianza,
-            "pronostico_2": "Menos de 2.5 goles",  # Ejemplo; personaliza según tus reglas
+            "pronostico_2": "Menos de 2.5 goles",
             "confianza_2": 0.70,
             "pronostico_3": "Ambos no anotan",
             "confianza_3": 0.65
