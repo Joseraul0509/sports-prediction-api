@@ -79,7 +79,7 @@ def obtener_datos_balldontlie(deporte):
     if deporte.upper() == "NBA":
         try:
             url = f"{BALLDONTLIE_BASE_URL}/games"
-            params = {"per_page": 20}  # Obtenemos algunos partidos recientes
+            params = {"per_page": 20}  # Obtener algunos partidos recientes
             resp = requests.get(url, params=params, timeout=10)
             if resp.status_code == 200:
                 for game in resp.json().get("data", []):
@@ -87,7 +87,7 @@ def obtener_datos_balldontlie(deporte):
                         "nombre_partido": game["home_team"]["full_name"] + " vs " + game["visitor_team"]["full_name"],
                         "liga": "NBA",
                         "deporte": "NBA",
-                        "goles_local_prom": float(game.get("home_team_score", 100)) / 10,  # Simulación
+                        "goles_local_prom": float(game.get("home_team_score", 100)) / 10,
                         "goles_visita_prom": float(game.get("visitor_team_score", 100)) / 10,
                         "racha_local": 3,
                         "racha_visita": 2,
@@ -98,7 +98,7 @@ def obtener_datos_balldontlie(deporte):
         except Exception as e:
             print("Error en balldontlie (NBA):", e)
     else:
-        # Para MLB y NHL, simulamos datos
+        # Para MLB y NHL, se simulan datos
         datos.append({
             "nombre_partido": f"Simulado {deporte} - Equipo A vs Equipo B",
             "liga": deporte,
@@ -115,9 +115,9 @@ def obtener_datos_balldontlie(deporte):
 
 def obtener_datos_actualizados():
     datos = []
-    # Datos para fútbol:
+    # Datos para fútbol
     datos.extend(obtener_datos_futbol())
-    # Datos para NBA, MLB y NHL:
+    # Datos para NBA, MLB y NHL
     for deporte in ["NBA", "MLB", "NHL"]:
         datos.extend(obtener_datos_balldontlie(deporte))
     return datos if datos else [{
@@ -173,6 +173,7 @@ def predecir_resultado(modelo, datos_partido):
 def actualizar_datos_partidos():
     nuevos_datos = obtener_datos_actualizados()
     for partido in nuevos_datos:
+        # Convertir "hora" a datetime si es string
         hora_valor = partido["hora"]
         if isinstance(hora_valor, str):
             try:
@@ -180,23 +181,28 @@ def actualizar_datos_partidos():
             except Exception as ex:
                 print(f"Error al convertir hora: {ex}")
                 hora_valor = datetime.utcnow()
-        partido["hora"] = hora_valor
+        # Convertir a string antes de enviar (para serialización JSON)
+        partido["hora"] = hora_valor.isoformat()
         # Upsert en la tabla "partidos" usando on_conflict sobre ["nombre_partido", "hora"]
         supabase.table("partidos").upsert(partido, on_conflict="nombre_partido,hora").execute()
     return {"status": "Datos actualizados correctamente"}
 
 def procesar_predicciones():
     model = entrenar_modelo()
-    partidos = obtener_datos_actualizados()  # En producción, estos datos pueden extraerse de Supabase o de las APIs directamente
+    partidos = obtener_datos_actualizados()
     for partido in partidos:
+        # Convertir "hora" a datetime si es string y luego a ISO string
         hora_valor = partido["hora"]
         if isinstance(hora_valor, str):
             try:
-                hora_valor = datetime.fromisoformat(hora_valor)
+                hora_dt = datetime.fromisoformat(hora_valor)
             except Exception as ex:
                 print(f"Error al convertir hora en predicción: {ex}")
-                hora_valor = datetime.utcnow()
-        partido["hora"] = hora_valor
+                hora_dt = datetime.utcnow()
+        else:
+            hora_dt = hora_valor
+        # Actualizar el valor "hora" en formato ISO string
+        partido["hora"] = hora_dt.isoformat()
         resultado, confianza = predecir_resultado(model, partido)
         prediccion = {
             "deporte": partido["deporte"],
