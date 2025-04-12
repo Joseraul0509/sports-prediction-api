@@ -98,6 +98,7 @@ def obtener_datos_balldontlie(deporte):
         except Exception as e:
             print("Error en balldontlie (NBA):", e)
     else:
+        # Para MLB y NHL, se simulan datos
         datos.append({
             "nombre_partido": f"Simulado {deporte} - Equipo A vs Equipo B",
             "liga": deporte,
@@ -142,13 +143,18 @@ def entrenar_modelo():
     df = obtener_datos_entrenamiento()
     X = df.drop("resultado", axis=1)
     y = df["resultado"]
-    # Usamos stratify para asegurar que ambas clases se distribuyan en los conjuntos
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42, stratify=y)
-    model = xgb.XGBClassifier(use_label_encoder=False, eval_metric="logloss")
-    model.fit(X_train, y_train)
-    preds = model.predict(X_test)
-    acc = accuracy_score(y_test, preds)
-    print(f"Precisión del modelo: {acc:.2f}")
+    # Si hay menos de 2 clases, entrenar con todos los datos
+    if len(y.unique()) < 2:
+        print("Datos insuficientes para diferenciar clases; usando todo el dataset para entrenamiento.")
+        model = xgb.XGBClassifier(use_label_encoder=False, eval_metric="logloss")
+        model.fit(X, y)
+    else:
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42, stratify=y)
+        model = xgb.XGBClassifier(use_label_encoder=False, eval_metric="logloss")
+        model.fit(X_train, y_train)
+        preds = model.predict(X_test)
+        acc = accuracy_score(y_test, preds)
+        print(f"Precisión del modelo: {acc:.2f}")
     return model
 
 def predecir_resultado(modelo, datos_partido):
@@ -168,6 +174,21 @@ def predecir_resultado(modelo, datos_partido):
     }
     return opciones.get(pred, ("Indefinido", 0.0))
 
+def manual_upsert(table_name: str, data: dict, conflict_columns: list):
+    query = supabase.table(table_name).select("*")
+    for col in conflict_columns:
+        query = query.eq(col, data[col])
+    result = query.execute()
+    if result.data and len(result.data) > 0:
+        update_query = supabase.table(table_name).update(data)
+        for col in conflict_columns:
+            update_query = update_query.eq(col, data[col])
+        update_query.execute()
+        return "updated"
+    else:
+        supabase.table(table_name).insert(data).execute()
+        return "inserted"
+
 def actualizar_datos_partidos():
     nuevos_datos = obtener_datos_actualizados()
     for partido in nuevos_datos:
@@ -179,7 +200,6 @@ def actualizar_datos_partidos():
                 print(f"Error al convertir hora: {ex}")
                 hora_valor = datetime.utcnow()
         partido["hora"] = hora_valor.strftime("%Y-%m-%d %H:%M:%S")
-        # Upsert manual en la tabla "partidos" usando on_conflict sobre ["nombre_partido", "hora"]
         result = manual_upsert("partidos", partido, ["nombre_partido", "hora"])
         print(f"Registro en partidos {partido['nombre_partido']}: {result}")
     return {"status": "Datos actualizados correctamente"}
@@ -214,19 +234,3 @@ def procesar_predicciones():
         result = manual_upsert("predicciones", prediccion, ["partido", "hora"])
         print(f"Registro en predicciones {prediccion['partido']}: {result}")
     return {"message": "Predicciones generadas correctamente"}
-
-def manual_upsert(table_name: str, data: dict, conflict_columns: list):
-    # Consultar si existe ya el registro
-    query = supabase.table(table_name).select("*")
-    for col in conflict_columns:
-        query = query.eq(col, data[col])
-    result = query.execute()
-    if result.data and len(result.data) > 0:
-        update_query = supabase.table(table_name).update(data)
-        for col in conflict_columns:
-            update_query = update_query.eq(col, data[col])
-        update_query.execute()
-        return "updated"
-    else:
-        supabase.table(table_name).insert(data).execute()
-        return "inserted"
