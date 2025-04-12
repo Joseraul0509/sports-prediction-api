@@ -46,8 +46,8 @@ def obtener_datos_futbol():
                         "goles_visita_prom": partido.get("MatchResults", [{}])[0].get("PointsTeam2", 1.2),
                         "racha_local": 3,
                         "racha_visita": 2,
-                        "clima": 1,
-                        "importancia_partido": 3,
+                        "clima": partido.get("clima", 1),  # Si existe un campo, sino se asigna 1
+                        "importancia_partido": partido.get("importancia_partido", 3),
                         "hora": partido.get("MatchDateTime", datetime.utcnow().isoformat())
                     })
         except Exception as e:
@@ -79,7 +79,7 @@ def obtener_datos_balldontlie(deporte):
     if deporte.upper() == "NBA":
         try:
             url = f"{BALLDONTLIE_BASE_URL}/games"
-            params = {"per_page": 20}  # Obtener algunos partidos recientes
+            params = {"per_page": 20}
             resp = requests.get(url, params=params, timeout=10)
             if resp.status_code == 200:
                 for game in resp.json().get("data", []):
@@ -91,14 +91,13 @@ def obtener_datos_balldontlie(deporte):
                         "goles_visita_prom": float(game.get("visitor_team_score", 100)) / 10,
                         "racha_local": 3,
                         "racha_visita": 2,
-                        "clima": None,
+                        "clima": 1,  # Asignamos un valor por defecto
                         "importancia_partido": 3,
                         "hora": game.get("date", datetime.utcnow().isoformat())
                     })
         except Exception as e:
             print("Error en balldontlie (NBA):", e)
     else:
-        # Para MLB y NHL, se simulan datos
         datos.append({
             "nombre_partido": f"Simulado {deporte} - Equipo A vs Equipo B",
             "liga": deporte,
@@ -107,7 +106,7 @@ def obtener_datos_balldontlie(deporte):
             "goles_visita_prom": 1.5 if deporte.upper() == "MLB" else 3.0,
             "racha_local": 3,
             "racha_visita": 2,
-            "clima": None,
+            "clima": 1,
             "importancia_partido": 3,
             "hora": datetime.utcnow().isoformat()
         })
@@ -141,9 +140,19 @@ def obtener_datos_entrenamiento():
 
 def entrenar_modelo():
     df = obtener_datos_entrenamiento()
+    # Convertir explícitamente las columnas a tipos numéricos
+    df = df.astype({
+        "goles_local_prom": float,
+        "goles_visita_prom": float,
+        "racha_local": int,
+        "racha_visita": int,
+        "clima": int,
+        "importancia_partido": int,
+        "resultado": int
+    })
     X = df.drop("resultado", axis=1)
     y = df["resultado"]
-    # Si hay menos de 2 clases, entrenar con todos los datos
+    # Si hay menos de 2 clases, entrenar con todo el dataset para evitar error de clases
     if len(y.unique()) < 2:
         print("Datos insuficientes para diferenciar clases; usando todo el dataset para entrenamiento.")
         model = xgb.XGBClassifier(use_label_encoder=False, eval_metric="logloss")
@@ -163,7 +172,7 @@ def predecir_resultado(modelo, datos_partido):
         "goles_visita_prom": datos_partido["goles_visita_prom"],
         "racha_local": datos_partido["racha_local"],
         "racha_visita": datos_partido["racha_visita"],
-        "clima": datos_partido["clima"],
+        "clima": int(datos_partido["clima"]),  # Aseguramos que sea entero
         "importancia_partido": datos_partido["importancia_partido"]
     }])
     pred = modelo.predict(df)[0]
