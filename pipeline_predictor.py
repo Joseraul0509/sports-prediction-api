@@ -1,4 +1,5 @@
 import os
+import uuid
 from datetime import datetime
 import pandas as pd
 import xgboost as xgb
@@ -18,34 +19,33 @@ supabase = create_client(url, key)
 
 def insertar_league(nombre_liga: str, _deporte: str):
     """
-    Inserta la liga en la tabla 'leagues' tomando en cuenta la estructura:
+    Inserta la liga en la tabla 'leagues' usando la estructura:
       - id (text)
       - name (text)
       - country (text)
       - flag (text)
-      - created_at (timestamp)
+      - created_at (timestamp with time zone)
     
-    Actualmente, 'country' y 'flag' se ponen en valores por defecto.
-    El campo 'deporte' no existe en 'leagues', así que NO se guarda.
+    Se genera un UUID para 'id', y se usan valores por defecto para 'country' y 'flag'.
     """
     try:
-        # Evita insertar si la liga es "Desconocida".
+        # Evita insertar si la liga es "Desconocida"
         if nombre_liga.lower() == "desconocida":
             print("Liga no insertada: valor 'Desconocida'")
             return
         
-        # Comprueba si ya existe en base a la columna 'name'.
+        # Comprueba si ya existe la liga (comparando en la columna "name")
         existe = supabase.table("leagues").select("*").match({
             "name": nombre_liga
         }).execute()
         
         if not existe.data:
-            # Insertamos la liga con valores por defecto en 'country' y 'flag'
             supabase.table("leagues").insert({
-                # 'id': <podrías asignar algo si lo requieres, pero es text>
+                "id": str(uuid.uuid4()),
                 "name": nombre_liga,
                 "country": "Unknown",
-                "flag": None
+                "flag": None,
+                # No es necesario enviar "created_at" si la base lo configura por defecto.
             }).execute()
             print(f"Liga insertada: {nombre_liga}")
     except Exception as e:
@@ -56,12 +56,11 @@ def insertar_partido(nombre_partido: str, liga: str, hora: str):
     Inserta el partido en la tabla 'partidos'.
     """
     try:
-        # Evita insertar si el partido es "Partido Desconocido".
+        # Evita insertar si el nombre es "Partido Desconocido"
         if nombre_partido.lower() == "partido desconocido":
             print("Partido no insertado: valor 'Partido Desconocido'")
             return
         
-        # Se comprueba por 'nombre_partido', 'liga' y 'hora'.
         existe = supabase.table("partidos").select("*").match({
             "nombre_partido": nombre_partido,
             "liga": liga,
@@ -187,7 +186,6 @@ def obtener_datos_actualizados():
     datos.extend(obtener_datos_futbol())
     for dep in ["NBA", "MLB", "NHL"]:
         datos.extend(obtener_datos_balldontlie(dep))
-    # Por si las APIs no devuelven nada, metemos un partido genérico.
     return datos if datos else [{
         "nombre_partido": "Arsenal vs Chelsea",
         "liga": "Premier League",
@@ -286,7 +284,6 @@ def actualizar_datos_partidos():
         # 2) Luego insertar el partido
         insertar_partido(partido["nombre_partido"], partido["liga"], partido["hora"])
         
-        # Upsert final para 'partidos' (mantiene la misma lógica)
         result = manual_upsert("partidos", partido, ["nombre_partido", "hora"])
         print(f"Registro en partidos {partido['nombre_partido']}: {result}")
     return {"status": "Datos actualizados correctamente"}
