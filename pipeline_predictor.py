@@ -16,30 +16,58 @@ supabase = create_client(url, key)
 # NUEVAS FUNCIONES DE INSERCIÓN
 # ===============================
 
-# Función para insertar en la tabla leagues (usar el nombre "leagues" para ser consistente)
-def insertar_league(nombre_liga: str, deporte: str):
+def insertar_league(nombre_liga: str, _deporte: str):
+    """
+    Inserta la liga en la tabla 'leagues' tomando en cuenta la estructura:
+      - id (text)
+      - name (text)
+      - country (text)
+      - flag (text)
+      - created_at (timestamp)
+    
+    Actualmente, 'country' y 'flag' se ponen en valores por defecto.
+    El campo 'deporte' no existe en 'leagues', así que NO se guarda.
+    """
     try:
+        # Evita insertar si la liga es "Desconocida".
+        if nombre_liga.lower() == "desconocida":
+            print("Liga no insertada: valor 'Desconocida'")
+            return
+        
+        # Comprueba si ya existe en base a la columna 'name'.
         existe = supabase.table("leagues").select("*").match({
-            "nombre": nombre_liga,
-            "deporte": deporte
+            "name": nombre_liga
         }).execute()
+        
         if not existe.data:
+            # Insertamos la liga con valores por defecto en 'country' y 'flag'
             supabase.table("leagues").insert({
-                "nombre": nombre_liga,
-                "deporte": deporte
+                # 'id': <podrías asignar algo si lo requieres, pero es text>
+                "name": nombre_liga,
+                "country": "Unknown",
+                "flag": None
             }).execute()
             print(f"Liga insertada: {nombre_liga}")
     except Exception as e:
         print(f"Error al insertar liga {nombre_liga}: {str(e)}")
 
-# Función para insertar en la tabla partidos (se insertan campos mínimos: nombre_partido, liga y hora)
 def insertar_partido(nombre_partido: str, liga: str, hora: str):
+    """
+    Inserta el partido en la tabla 'partidos'.
+    """
     try:
+        # Evita insertar si el partido es "Partido Desconocido".
+        if nombre_partido.lower() == "partido desconocido":
+            print("Partido no insertado: valor 'Partido Desconocido'")
+            return
+        
+        # Se comprueba por 'nombre_partido', 'liga' y 'hora'.
         existe = supabase.table("partidos").select("*").match({
             "nombre_partido": nombre_partido,
             "liga": liga,
             "hora": hora
         }).execute()
+        
         if not existe.data:
             supabase.table("partidos").insert({
                 "nombre_partido": nombre_partido,
@@ -88,7 +116,7 @@ def obtener_datos_futbol():
                         "goles_visita_prom": partido.get("MatchResults", [{}])[0].get("PointsTeam2", 1.2),
                         "racha_local": 3,
                         "racha_visita": 2,
-                        "clima": partido.get("clima", 1),  # Si existe un campo, sino se asigna 1
+                        "clima": partido.get("clima", 1),
                         "importancia_partido": partido.get("importancia_partido", 3),
                         "hora": partido.get("MatchDateTime", datetime.utcnow().isoformat())
                     })
@@ -133,7 +161,7 @@ def obtener_datos_balldontlie(deporte):
                         "goles_visita_prom": float(game.get("visitor_team_score", 100)) / 10,
                         "racha_local": 3,
                         "racha_visita": 2,
-                        "clima": 1,  # Asignamos un valor por defecto
+                        "clima": 1,
                         "importancia_partido": 3,
                         "hora": game.get("date", datetime.utcnow().isoformat())
                     })
@@ -157,8 +185,9 @@ def obtener_datos_balldontlie(deporte):
 def obtener_datos_actualizados():
     datos = []
     datos.extend(obtener_datos_futbol())
-    for deporte in ["NBA", "MLB", "NHL"]:
-        datos.extend(obtener_datos_balldontlie(deporte))
+    for dep in ["NBA", "MLB", "NHL"]:
+        datos.extend(obtener_datos_balldontlie(dep))
+    # Por si las APIs no devuelven nada, metemos un partido genérico.
     return datos if datos else [{
         "nombre_partido": "Arsenal vs Chelsea",
         "liga": "Premier League",
@@ -182,7 +211,6 @@ def obtener_datos_entrenamiento():
 
 def entrenar_modelo():
     df = obtener_datos_entrenamiento()
-    # Convertir explícitamente las columnas a tipos numéricos
     df = df.astype({
         "goles_local_prom": float,
         "goles_visita_prom": float,
@@ -194,7 +222,7 @@ def entrenar_modelo():
     })
     X = df.drop("resultado", axis=1)
     y = df["resultado"]
-    # Si hay menos de 2 clases, entrenar con todo el dataset para evitar error de clases
+
     if len(y.unique()) < 2:
         print("Datos insuficientes para diferenciar clases; usando todo el dataset para entrenamiento.")
         model = xgb.XGBClassifier(use_label_encoder=False, eval_metric="logloss")
@@ -206,6 +234,7 @@ def entrenar_modelo():
         preds = model.predict(X_test)
         acc = accuracy_score(y_test, preds)
         print(f"Precisión del modelo: {acc:.2f}")
+
     return model
 
 def predecir_resultado(modelo, datos_partido):
@@ -214,7 +243,7 @@ def predecir_resultado(modelo, datos_partido):
         "goles_visita_prom": datos_partido["goles_visita_prom"],
         "racha_local": datos_partido["racha_local"],
         "racha_visita": datos_partido["racha_visita"],
-        "clima": int(datos_partido["clima"]),  # Aseguramos que sea entero
+        "clima": int(datos_partido["clima"]),
         "importancia_partido": datos_partido["importancia_partido"]
     }])
     pred = modelo.predict(df)[0]
@@ -252,11 +281,12 @@ def actualizar_datos_partidos():
                 hora_valor = datetime.utcnow()
         partido["hora"] = hora_valor.strftime("%Y-%m-%d %H:%M:%S")
         
-        # --- NUEVAS LLAMADAS PARA INSERTAR EN ORDEN ---
+        # 1) Insertar primero la liga
         insertar_league(partido["liga"], partido["deporte"])
+        # 2) Luego insertar el partido
         insertar_partido(partido["nombre_partido"], partido["liga"], partido["hora"])
-        # -------------------------------------------------
-
+        
+        # Upsert final para 'partidos' (mantiene la misma lógica)
         result = manual_upsert("partidos", partido, ["nombre_partido", "hora"])
         print(f"Registro en partidos {partido['nombre_partido']}: {result}")
     return {"status": "Datos actualizados correctamente"}
@@ -275,6 +305,7 @@ def procesar_predicciones():
         else:
             hora_dt = hora_valor
         partido["hora"] = hora_dt.strftime("%Y-%m-%d %H:%M:%S")
+        
         resultado, confianza = predecir_resultado(model, partido)
         prediccion = {
             "deporte": partido["deporte"],
