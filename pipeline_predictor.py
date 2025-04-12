@@ -12,6 +12,48 @@ url = os.getenv("SUPABASE_URL")
 key = os.getenv("SUPABASE_KEY")
 supabase = create_client(url, key)
 
+# ===============================
+# NUEVAS FUNCIONES DE INSERCIÓN
+# ===============================
+
+# Función para insertar en la tabla leagues (usar el nombre "leagues" para ser consistente)
+def insertar_league(nombre_liga: str, deporte: str):
+    try:
+        existe = supabase.table("leagues").select("*").match({
+            "nombre": nombre_liga,
+            "deporte": deporte
+        }).execute()
+        if not existe.data:
+            supabase.table("leagues").insert({
+                "nombre": nombre_liga,
+                "deporte": deporte
+            }).execute()
+            print(f"Liga insertada: {nombre_liga}")
+    except Exception as e:
+        print(f"Error al insertar liga {nombre_liga}: {str(e)}")
+
+# Función para insertar en la tabla partidos (se insertan campos mínimos: nombre_partido, liga y hora)
+def insertar_partido(nombre_partido: str, liga: str, hora: str):
+    try:
+        existe = supabase.table("partidos").select("*").match({
+            "nombre_partido": nombre_partido,
+            "liga": liga,
+            "hora": hora
+        }).execute()
+        if not existe.data:
+            supabase.table("partidos").insert({
+                "nombre_partido": nombre_partido,
+                "liga": liga,
+                "hora": hora
+            }).execute()
+            print(f"Partido insertado: {nombre_partido}")
+    except Exception as e:
+        print(f"Error al insertar partido {nombre_partido}: {str(e)}")
+
+# ===============================
+# FIN DE NUEVAS FUNCIONES
+# ===============================
+
 # CONFIGURACIÓN DE APIs DEPORTIVAS
 
 # Fútbol: OpenLigaDB y Football-data.org
@@ -209,6 +251,12 @@ def actualizar_datos_partidos():
                 print(f"Error al convertir hora: {ex}")
                 hora_valor = datetime.utcnow()
         partido["hora"] = hora_valor.strftime("%Y-%m-%d %H:%M:%S")
+        
+        # --- NUEVAS LLAMADAS PARA INSERTAR EN ORDEN ---
+        insertar_league(partido["liga"], partido["deporte"])
+        insertar_partido(partido["nombre_partido"], partido["liga"], partido["hora"])
+        # -------------------------------------------------
+
         result = manual_upsert("partidos", partido, ["nombre_partido", "hora"])
         print(f"Registro en partidos {partido['nombre_partido']}: {result}")
     return {"status": "Datos actualizados correctamente"}
