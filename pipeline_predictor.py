@@ -7,10 +7,32 @@ from sklearn.metrics import accuracy_score
 import requests
 from supabase import create_client
 
-# Conexión a Supabase (variables de entorno en .env)
+# Conexión a Supabase (usando variables de entorno definidas en .env)
 url = os.getenv("SUPABASE_URL")
 key = os.getenv("SUPABASE_KEY")
 supabase = create_client(url, key)
+
+# Función manual de upsert
+def manual_upsert(table_name: str, data: dict, conflict_columns: list):
+    """
+    Realiza un upsert manual: consulta si existe un registro con los valores dados en conflict_columns;
+    si existe, lo actualiza; si no, lo inserta.
+    """
+    query = supabase.table(table_name).select("*")
+    for col in conflict_columns:
+        query = query.eq(col, data[col])
+    result = query.execute()
+    
+    if result.data and len(result.data) > 0:
+        # Actualizar: aplicamos el update con los mismos filtros.
+        update_query = supabase.table(table_name).update(data)
+        for col in conflict_columns:
+            update_query = update_query.eq(col, data[col])
+        update_query.execute()
+        return "updated"
+    else:
+        supabase.table(table_name).insert(data).execute()
+        return "inserted"
 
 # CONFIGURACIÓN DE APIs DEPORTIVAS
 
@@ -30,33 +52,9 @@ FOOTBALL_DATA_ENDPOINT = "https://api.football-data.org/v2/matches"
 # APIs para NBA, MLB y NHL usando balldontlie (para NBA es real, para los otros se simulan)
 BALLDONTLIE_BASE_URL = "https://www.balldontlie.io/api/v1"
 
-### Función de upsert alternativa ###
-def upsert_record(table_name: str, data: dict, conflict_columns: list):
-    """
-    Función para simular un upsert:
-    - Realiza una consulta para ver si existe un registro que coincida con los valores en conflict_columns.
-    - Si existe, actualiza el registro.
-    - Si no existe, inserta el nuevo registro.
-    """
-    query = supabase.table(table_name).select("*")
-    for col in conflict_columns:
-        query = query.eq(col, data[col])
-    result = query.execute()
-    if result.data:  # Si ya existe, se actualiza
-        # Aquí se usa una actualización basada en la primera columna de conflicto (puedes extender para más columnas)
-        update_query = supabase.table(table_name).update(data)
-        # Aplicar el filtro para cada columna de conflicto
-        for col in conflict_columns:
-            update_query = update_query.eq(col, data[col])
-        update_query.execute()
-        return "updated"
-    else:
-        supabase.table(table_name).insert(data).execute()
-        return "inserted"
-
-### Función para obtener datos de fútbol ###
 def obtener_datos_futbol():
     datos = []
+    # Obtener datos de OpenLigaDB:
     for endpoint in OPENLIGADB_ENDPOINTS:
         try:
             resp = requests.get(endpoint, timeout=10)
@@ -76,6 +74,7 @@ def obtener_datos_futbol():
                     })
         except Exception as e:
             print("Error en OpenLigaDB:", e)
+    # Obtener datos de Football-data.org:
     headers = {"X-Auth-Token": os.getenv("FOOTBALL_DATA_TOKEN")}
     try:
         resp = requests.get(FOOTBALL_DATA_ENDPOINT, headers=headers, timeout=10)
@@ -97,7 +96,6 @@ def obtener_datos_futbol():
         print("Error en Football Data API:", e)
     return datos
 
-### Función para obtener datos de NBA, MLB y NHL usando balldontlie ###
 def obtener_datos_balldontlie(deporte):
     datos = []
     if deporte.upper() == "NBA":
@@ -136,7 +134,6 @@ def obtener_datos_balldontlie(deporte):
         })
     return datos
 
-### Función que combina datos de todas las fuentes ###
 def obtener_datos_actualizados():
     datos = []
     datos.extend(obtener_datos_futbol())
@@ -155,7 +152,6 @@ def obtener_datos_actualizados():
         "hora": datetime.utcnow().isoformat()
     }]
 
-### Función para obtener datos de entrenamiento (simulados) ###
 def obtener_datos_entrenamiento():
     return pd.DataFrame([
         {"goles_local_prom": 1.8, "goles_visita_prom": 1.2, "racha_local": 3, "racha_visita": 2, "clima": 1, "importancia_partido": 3, "resultado": 1},
@@ -164,7 +160,6 @@ def obtener_datos_entrenamiento():
         {"goles_local_prom": 1.3, "goles_visita_prom": 1.4, "racha_local": 2, "racha_visita": 3, "clima": 3, "importancia_partido": 2, "resultado": 0}
     ])
 
-### Función para entrenar el modelo XGBoost ###
 def entrenar_modelo():
     df = obtener_datos_entrenamiento()
     X = df.drop("resultado", axis=1)
@@ -177,7 +172,6 @@ def entrenar_modelo():
     print(f"Precisión del modelo: {acc:.2f}")
     return model
 
-### Función para predecir el resultado ###
 def predecir_resultado(modelo, datos_partido):
     df = pd.DataFrame([{
         "goles_local_prom": datos_partido["goles_local_prom"],
@@ -195,11 +189,9 @@ def predecir_resultado(modelo, datos_partido):
     }
     return opciones.get(pred, ("Indefinido", 0.0))
 
-### Función para actualizar datos de partidos en Supabase ###
 def actualizar_datos_partidos():
     nuevos_datos = obtener_datos_actualizados()
     for partido in nuevos_datos:
-        # Convertir "hora" a datetime si es string y luego formatear a "YYYY-MM-DD HH:MM:SS"
         hora_valor = partido["hora"]
         if isinstance(hora_valor, str):
             try:
@@ -208,16 +200,15 @@ def actualizar_datos_partidos():
                 print(f"Error al convertir hora: {ex}")
                 hora_valor = datetime.utcnow()
         partido["hora"] = hora_valor.strftime("%Y-%m-%d %H:%M:%S")
-        # Upsert en la tabla "partidos" usando on_conflict sobre ["nombre_partido", "hora"]
-        upsert_record = upsert_record = supabase.table("partidos").upsert(partido, on_conflict=["nombre_partido", "hora"]).execute()
+        # Upsert manual en la tabla "partidos" usando la función manual_upsert
+        manual_upsert_result = manual_upsert("partidos", partido, ["nombre_partido", "hora"])
+        print(f"Registro en partidos {partido['nombre_partido']}: {manual_upsert_result}")
     return {"status": "Datos actualizados correctamente"}
 
-### Función para procesar predicciones y guardar en Supabase ###
 def procesar_predicciones():
     model = entrenar_modelo()
     partidos = obtener_datos_actualizados()
     for partido in partidos:
-        # Convertir "hora" a datetime si es string y luego formatear
         hora_valor = partido["hora"]
         if isinstance(hora_valor, str):
             try:
@@ -241,7 +232,23 @@ def procesar_predicciones():
             "pronostico_3": "Ambos no anotan",
             "confianza_3": 0.65
         }
-        # Upsert en la tabla "predicciones" usando on_conflict sobre ["partido", "hora"]
-        supabase.table("predicciones").upsert(prediccion, on_conflict=["partido", "hora"]).execute()
-        print("Predicción guardada para:", prediccion["partido"])
+        # Upsert manual en la tabla "predicciones" usando la función manual_upsert
+        manual_upsert_result = manual_upsert("predicciones", prediccion, ["partido", "hora"])
+        print(f"Registro en predicciones {prediccion['partido']}: {manual_upsert_result}")
     return {"message": "Predicciones generadas correctamente"}
+
+# Definición de la función manual_upsert (ubicada aquí para que esté disponible)
+def manual_upsert(table_name: str, data: dict, conflict_columns: list):
+    query = supabase.table(table_name).select("*")
+    for col in conflict_columns:
+        query = query.eq(col, data[col])
+    result = query.execute()
+    if result.data and len(result.data) > 0:
+        update_query = supabase.table(table_name).update(data)
+        for col in conflict_columns:
+            update_query = update_query.eq(col, data[col])
+        update_query.execute()
+        return "updated"
+    else:
+        supabase.table(table_name).insert(data).execute()
+        return "inserted"
