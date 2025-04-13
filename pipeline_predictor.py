@@ -13,6 +13,9 @@ url = os.getenv("SUPABASE_URL")
 key = os.getenv("SUPABASE_KEY")
 supabase = create_client(url, key)
 
+# API-SPORTS KEY (se recomienda tenerla en el .env; aquí se usa directamente)
+API_SPORTS_KEY = os.getenv("API_SPORTS_KEY", "90e3a2185a80e39a04d27e0ff2769e40")
+
 # ===============================
 # NUEVAS FUNCIONES DE INSERCIÓN
 # ===============================
@@ -83,7 +86,9 @@ def insertar_partido(nombre_partido: str, liga: str, hora: str):
 
 # CONFIGURACIÓN DE APIs DEPORTIVAS
 
-# Fútbol: OpenLigaDB y Football-data.org
+# Para Fútbol:
+# - API-SPORTS (principal): https://v3.football.api-sports.io/
+# - OpenLigaDB y Football-data.org (complementarias)
 OPENLIGADB_ENDPOINTS = [
     "https://api.openligadb.de/getmatchdata/dfb/2024/5",
     "https://api.openligadb.de/getmatchdata/bl2/2024/28",
@@ -94,14 +99,49 @@ OPENLIGADB_ENDPOINTS = [
     "https://api.openligadb.de/getmatchdata/uel24/2024/12"
 ]
 FOOTBALL_DATA_ENDPOINT = "https://api.football-data.org/v2/matches"
-# Asegúrate de tener la variable FOOTBALL_DATA_TOKEN en tu .env
+# Asegúrese de tener la variable FOOTBALL_DATA_TOKEN en su .env
 
-# APIs para NBA, MLB y NHL usando balldontlie (para NBA es real, para los otros se simulan)
+# Para NBA:
+# - API-SPORTS (principal): https://v2.nba.api-sports.io/
+# - balldontlie (complementaria)
 BALLDONTLIE_BASE_URL = "https://www.balldontlie.io/api/v1"
 
+# Función auxiliar para obtener la fecha actual (en formato ISO)
+def get_today():
+    return datetime.utcnow().strftime("%Y-%m-%d")
+
+# Función para obtener datos de Fútbol
 def obtener_datos_futbol():
     datos = []
-    # Obtener datos de OpenLigaDB:
+    today = get_today()
+
+    # API-SPORTS para fútbol (v3)
+    try:
+        url_api = f"https://v3.football.api-sports.io/fixtures?date={today}"
+        headers_api = {"x-apisports-key": API_SPORTS_KEY}
+        resp = requests.get(url_api, headers=headers_api, timeout=10)
+        if resp.status_code == 200:
+            for fixture in resp.json().get("response", []):
+                info = fixture.get("fixture", {})
+                teams = fixture.get("teams", {})
+                datos.append({
+                    "nombre_partido": teams.get("home", {}).get("name", "Partido Desconocido") + " vs " + teams.get("away", {}).get("name", ""),
+                    "liga": fixture.get("league", {}).get("name", "Desconocida"),
+                    "deporte": "futbol",
+                    "goles_local_prom": fixture.get("goals", {}).get("home", 1.5),
+                    "goles_visita_prom": fixture.get("goals", {}).get("away", 1.2),
+                    "racha_local": 3,
+                    "racha_visita": 2,
+                    "clima": 1,
+                    "importancia_partido": 3,
+                    "hora": info.get("date", datetime.utcnow().isoformat())
+                })
+        else:
+            print("Error en API-SPORTS fútbol:", resp.status_code)
+    except Exception as e:
+        print("Excepción en API-SPORTS fútbol:", e)
+
+    # Complemento con OpenLigaDB
     for endpoint in OPENLIGADB_ENDPOINTS:
         try:
             resp = requests.get(endpoint, timeout=10)
@@ -121,10 +161,10 @@ def obtener_datos_futbol():
                     })
         except Exception as e:
             print("Error en OpenLigaDB:", e)
-    # Obtener datos de Football-data.org:
-    headers = {"X-Auth-Token": os.getenv("FOOTBALL_DATA_TOKEN")}
+    # Complemento con Football-data.org
+    headers_fd = {"X-Auth-Token": os.getenv("FOOTBALL_DATA_TOKEN")}
     try:
-        resp = requests.get(FOOTBALL_DATA_ENDPOINT, headers=headers, timeout=10)
+        resp = requests.get(FOOTBALL_DATA_ENDPOINT, headers=headers_fd, timeout=10)
         if resp.status_code == 200:
             for partido in resp.json().get("matches", []):
                 datos.append({
@@ -143,49 +183,121 @@ def obtener_datos_futbol():
         print("Error en Football Data API:", e)
     return datos
 
-def obtener_datos_balldontlie(deporte):
+# Función para obtener datos de NBA
+def obtener_datos_nba():
     datos = []
-    if deporte.upper() == "NBA":
-        try:
-            url = f"{BALLDONTLIE_BASE_URL}/games"
-            params = {"per_page": 20}
-            resp = requests.get(url, params=params, timeout=10)
-            if resp.status_code == 200:
-                for game in resp.json().get("data", []):
+    today = get_today()
+
+    # API-SPORTS para NBA (v2)
+    try:
+        url_api = f"https://v2.nba.api-sports.io/games?date={today}"
+        headers_api = {"x-apisports-key": API_SPORTS_KEY}
+        resp = requests.get(url_api, headers=headers_api, timeout=10)
+        if resp.status_code == 200:
+            for game in resp.json().get("response", []):
+                equipos = game.get("teams", {})
+                datos.append({
+                    "nombre_partido": equipos.get("home", {}).get("name", "Partido Desconocido") + " vs " + equipos.get("away", {}).get("name", ""),
+                    "liga": game.get("league", {}).get("name", "NBA"),
+                    "deporte": "NBA",
+                    "goles_local_prom": float(game.get("scores", {}).get("home", 100)) / 10,
+                    "goles_visita_prom": float(game.get("scores", {}).get("away", 100)) / 10,
+                    "racha_local": 3,
+                    "racha_visita": 2,
+                    "clima": 1,
+                    "importancia_partido": 3,
+                    "hora": game.get("date", datetime.utcnow().isoformat())
+                })
+        else:
+            print("Error en API-SPORTS NBA:", resp.status_code)
+    except Exception as e:
+        print("Excepción en API-SPORTS NBA:", e)
+
+    # Complemento con balldontlie
+    try:
+        url_bd = f"{BALLDONTLIE_BASE_URL}/games"
+        params = {"per_page": 20, "dates[]": today}
+        resp = requests.get(url_bd, params=params, timeout=10)
+        if resp.status_code == 200:
+            for game in resp.json().get("data", []):
+                datos.append({
+                    "nombre_partido": game["home_team"]["full_name"] + " vs " + game["visitor_team"]["full_name"],
+                    "liga": "NBA",
+                    "deporte": "NBA",
+                    "goles_local_prom": float(game.get("home_team_score", 100)) / 10,
+                    "goles_visita_prom": float(game.get("visitor_team_score", 100)) / 10,
+                    "racha_local": 3,
+                    "racha_visita": 2,
+                    "clima": 1,
+                    "importancia_partido": 3,
+                    "hora": game.get("date", datetime.utcnow().isoformat())
+                })
+        else:
+            print("Error en balldontlie (NBA):", resp.status_code)
+    except Exception as e:
+        print("Excepción en balldontlie (NBA):", e)
+    return datos
+
+# Función para obtener datos de MLB y NHL utilizando API-SPORTS
+def obtener_datos_deporte_api(deporte):
+    datos = []
+    today = get_today()
+    if deporte.upper() == "MLB":
+        ENDPOINT = "https://v1.baseball.api-sports.io/games"
+    elif deporte.upper() == "NHL":
+        ENDPOINT = "https://v1.hockey.api-sports.io/games"
+    else:
+        return datos
+
+    params = {"date": today}
+    headers_api = {"x-apisports-key": API_SPORTS_KEY}
+    try:
+        resp = requests.get(ENDPOINT, headers=headers_api, params=params, timeout=10)
+        if resp.status_code == 200:
+            for game in resp.json().get("response", []):
+                if deporte.upper() == "MLB":
                     datos.append({
-                        "nombre_partido": game["home_team"]["full_name"] + " vs " + game["visitor_team"]["full_name"],
-                        "liga": "NBA",
-                        "deporte": "NBA",
-                        "goles_local_prom": float(game.get("home_team_score", 100)) / 10,
-                        "goles_visita_prom": float(game.get("visitor_team_score", 100)) / 10,
-                        "racha_local": 3,
-                        "racha_visita": 2,
+                        "nombre_partido": game.get("teams", {}).get("home", {}).get("name", "Equipo Local") + " vs " +
+                                          game.get("teams", {}).get("away", {}).get("name", "Equipo Visitante"),
+                        "liga": game.get("league", {}).get("name", "Desconocida"),
+                        "deporte": "MLB",
+                        "goles_local_prom": game.get("scores", {}).get("home", 0.0),
+                        "goles_visita_prom": game.get("scores", {}).get("away", 0.0),
+                        "racha_local": 0,
+                        "racha_visita": 0,
                         "clima": 1,
                         "importancia_partido": 3,
                         "hora": game.get("date", datetime.utcnow().isoformat())
                     })
-        except Exception as e:
-            print("Error en balldontlie (NBA):", e)
-    else:
-        datos.append({
-            "nombre_partido": f"Simulado {deporte} - Equipo A vs Equipo B",
-            "liga": deporte,
-            "deporte": deporte,
-            "goles_local_prom": 2.0 if deporte.upper() == "MLB" else 3.0,
-            "goles_visita_prom": 1.5 if deporte.upper() == "MLB" else 3.0,
-            "racha_local": 3,
-            "racha_visita": 2,
-            "clima": 1,
-            "importancia_partido": 3,
-            "hora": datetime.utcnow().isoformat()
-        })
+                elif deporte.upper() == "NHL":
+                    datos.append({
+                        "nombre_partido": game.get("teams", {}).get("home", {}).get("name", "Equipo Local") + " vs " +
+                                          game.get("teams", {}).get("away", {}).get("name", "Equipo Visitante"),
+                        "liga": game.get("league", {}).get("name", "Desconocida"),
+                        "deporte": "NHL",
+                        "goles_local_prom": game.get("scores", {}).get("home", 0.0),
+                        "goles_visita_prom": game.get("scores", {}).get("away", 0.0),
+                        "racha_local": 0,
+                        "racha_visita": 0,
+                        "clima": 1,
+                        "importancia_partido": 3,
+                        "hora": game.get("date", datetime.utcnow().isoformat())
+                    })
+        else:
+            print(f"Error en API-SPORTS {deporte}:", resp.status_code)
+    except Exception as e:
+        print(f"Excepción en API-SPORTS {deporte}:", e)
     return datos
 
 def obtener_datos_actualizados():
     datos = []
+    # Datos de Fútbol: API-SPORTS principal + otras fuentes complementarias
     datos.extend(obtener_datos_futbol())
-    for dep in ["NBA", "MLB", "NHL"]:
-        datos.extend(obtener_datos_balldontlie(dep))
+    # Datos de NBA: API-SPORTS principal + complementos
+    datos.extend(obtener_datos_nba())
+    # Datos de MLB y NHL: API-SPORTS
+    for dep in ["MLB", "NHL"]:
+        datos.extend(obtener_datos_deporte_api(dep))
     return datos if datos else [{
         "nombre_partido": "Arsenal vs Chelsea",
         "liga": "Premier League",
@@ -319,3 +431,7 @@ def procesar_predicciones():
         result = manual_upsert("predicciones", prediccion, ["partido", "hora"])
         print(f"Registro en predicciones {prediccion['partido']}: {result}")
     return {"message": "Predicciones generadas correctamente"}
+
+if __name__ == "__main__":
+    actualizar_datos_partidos()
+    procesar_predicciones()
