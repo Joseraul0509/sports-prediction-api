@@ -21,55 +21,32 @@ API_SPORTS_KEY = os.getenv("API_SPORTS_KEY", "90e3a2185a80e39a04d27e0ff2769e40")
 # ===============================
 
 def insertar_league(nombre_liga: str, _deporte: str):
-    """
-    Inserta la liga en la tabla 'leagues' usando la estructura:
-      - id (text)
-      - name (text)
-      - country (text)
-      - flag (text)
-      - created_at (timestamp with time zone)
-
-    Se genera un UUID para 'id', y se usan valores por defecto para 'country' y 'flag'.
-    """
     try:
-        # Evita insertar si la liga es "Desconocida"
         if nombre_liga.lower() == "desconocida":
             print("Liga no insertada: valor 'Desconocida'")
             return
-
-        # Comprueba si ya existe la liga (comparando en la columna "name")
-        existe = supabase.table("leagues").select("*").match({
-            "name": nombre_liga
-        }).execute()
-
+        existe = supabase.table("leagues").select("*").match({"name": nombre_liga}).execute()
         if not existe.data:
             supabase.table("leagues").insert({
                 "id": str(uuid.uuid4()),
                 "name": nombre_liga,
                 "country": "Unknown",
                 "flag": None,
-                # No es necesario enviar "created_at" si la base lo configura por defecto.
             }).execute()
             print(f"Liga insertada: {nombre_liga}")
     except Exception as e:
         print(f"Error al insertar liga {nombre_liga}: {str(e)}")
 
 def insertar_partido(nombre_partido: str, liga: str, hora: str):
-    """
-    Inserta el partido en la tabla 'partidos'.
-    """
     try:
-        # Evita insertar si el nombre es "Partido Desconocido"
         if nombre_partido.lower() == "partido desconocido":
             print("Partido no insertado: valor 'Partido Desconocido'")
             return
-
         existe = supabase.table("partidos").select("*").match({
             "nombre_partido": nombre_partido,
             "liga": liga,
             "hora": hora
         }).execute()
-
         if not existe.data:
             supabase.table("partidos").insert({
                 "nombre_partido": nombre_partido,
@@ -86,9 +63,7 @@ def insertar_partido(nombre_partido: str, liga: str, hora: str):
 
 # CONFIGURACIÓN DE APIs DEPORTIVAS
 
-# Para Fútbol:
-# - API-SPORTS (principal): https://v3.football.api-sports.io/
-# - OpenLigaDB y Football-data.org (complementarias)
+# Fuentes para Fútbol:
 OPENLIGADB_ENDPOINTS = [
     "https://api.openligadb.de/getmatchdata/dfb/2024/5",
     "https://api.openligadb.de/getmatchdata/bl2/2024/28",
@@ -98,24 +73,21 @@ OPENLIGADB_ENDPOINTS = [
     "https://api.openligadb.de/getmatchdata/ucl2024/2024/4",
     "https://api.openligadb.de/getmatchdata/uel24/2024/12"
 ]
+# Para Football-data.org, se usaba v2, pero se recibe 403; se captura este error.
 FOOTBALL_DATA_ENDPOINT = "https://api.football-data.org/v2/matches"
-# Asegúrese de tener la variable FOOTBALL_DATA_TOKEN en su .env
 
-# Para NBA:
-# - API-SPORTS (principal): https://v2.nba.api-sports.io/
-# - balldontlie (complementaria)
+# Fuentes para NBA:
 BALLDONTLIE_BASE_URL = "https://www.balldontlie.io/api/v1"
 
-# Función auxiliar para obtener la fecha actual en formato YYYY-MM-DD
 def get_today():
     return datetime.utcnow().strftime("%Y-%m-%d")
 
-# Función para obtener datos de Fútbol
+# FUNCIONES PARA OBTENCIÓN DE DATOS
+
 def obtener_datos_futbol():
     datos = []
     today = get_today()
-
-    # API-SPORTS para fútbol (v3)
+    # API-SPORTS principal para fútbol (v3)
     try:
         url_api = f"https://v3.football.api-sports.io/fixtures?date={today}"
         headers_api = {"x-apisports-key": API_SPORTS_KEY}
@@ -129,7 +101,8 @@ def obtener_datos_futbol():
                     info = fixture.get("fixture", {})
                     teams = fixture.get("teams", {})
                     datos.append({
-                        "nombre_partido": teams.get("home", {}).get("name", "Partido Desconocido") + " vs " + teams.get("away", {}).get("name", ""),
+                        "nombre_partido": teams.get("home", {}).get("name", "Partido Desconocido") + " vs " +
+                                          teams.get("away", {}).get("name", ""),
                         "liga": fixture.get("league", {}).get("name", "Desconocida"),
                         "deporte": "futbol",
                         "goles_local_prom": fixture.get("goals", {}).get("home", 1.5),
@@ -165,9 +138,9 @@ def obtener_datos_futbol():
                     })
         except Exception as e:
             print("Error en OpenLigaDB:", e)
-    # Complemento con Football-data.org
-    headers_fd = {"X-Auth-Token": os.getenv("FOOTBALL_DATA_TOKEN")}
+    # Complemento con Football-data.org (si retorna 403, se ignora)
     try:
+        headers_fd = {"X-Auth-Token": os.getenv("FOOTBALL_DATA_TOKEN")}
         resp = requests.get(FOOTBALL_DATA_ENDPOINT, headers=headers_fd, timeout=10)
         if resp.status_code == 200:
             for partido in resp.json().get("matches", []):
@@ -189,12 +162,10 @@ def obtener_datos_futbol():
         print("Excepción en Football Data API:", e)
     return datos
 
-# Función para obtener datos de NBA
 def obtener_datos_nba():
     datos = []
     today = get_today()
-
-    # API-SPORTS para NBA (v2)
+    # API-SPORTS principal para NBA (v2)
     try:
         url_api = f"https://v2.nba.api-sports.io/games?date={today}"
         headers_api = {"x-apisports-key": API_SPORTS_KEY}
@@ -205,14 +176,12 @@ def obtener_datos_nba():
                 print("Respuesta inesperada en API-SPORTS NBA:", resp.json())
             else:
                 for game in respuesta:
-                    # Verificamos que cada elemento sea un diccionario
                     if not isinstance(game, dict):
                         print("Elemento inesperado en API-SPORTS NBA:", game)
                         continue
                     equipos = game.get("teams", {})
                     datos.append({
-                        "nombre_partido": equipos.get("home", {}).get("name", "Partido Desconocido") +
-                                          " vs " +
+                        "nombre_partido": equipos.get("home", {}).get("name", "Partido Desconocido") + " vs " +
                                           equipos.get("away", {}).get("name", ""),
                         "liga": game.get("league", {}).get("name", "NBA"),
                         "deporte": "NBA",
@@ -229,7 +198,7 @@ def obtener_datos_nba():
     except Exception as e:
         print("Excepción en API-SPORTS NBA:", e)
 
-    # Complemento con balldontlie
+    # Complemento con balldontlie (si retorna 404, se captura y continúa)
     try:
         url_bd = f"{BALLDONTLIE_BASE_URL}/games"
         params = {"per_page": 20, "dates[]": today}
@@ -254,7 +223,6 @@ def obtener_datos_nba():
         print("Excepción en balldontlie (NBA):", e)
     return datos
 
-# Función para obtener datos de MLB y NHL utilizando API-SPORTS (sin simulación)
 def obtener_datos_deporte_api(deporte):
     datos = []
     today = get_today()
@@ -309,11 +277,8 @@ def obtener_datos_deporte_api(deporte):
 
 def obtener_datos_actualizados():
     datos = []
-    # Datos de Fútbol: API-SPORTS principal + complementos
     datos.extend(obtener_datos_futbol())
-    # Datos de NBA: API-SPORTS principal + complementos
     datos.extend(obtener_datos_nba())
-    # Datos de MLB y NHL: API-SPORTS (sin simulación)
     for dep in ["MLB", "NHL"]:
         datos.extend(obtener_datos_deporte_api(dep))
     return datos if datos else [{
@@ -350,7 +315,6 @@ def entrenar_modelo():
     })
     X = df.drop("resultado", axis=1)
     y = df["resultado"]
-
     if len(y.unique()) < 2:
         print("Datos insuficientes para diferenciar clases; usando todo el dataset para entrenamiento.")
         model = xgb.XGBClassifier(use_label_encoder=False, eval_metric="logloss")
@@ -362,7 +326,6 @@ def entrenar_modelo():
         preds = model.predict(X_test)
         acc = accuracy_score(y_test, preds)
         print(f"Precisión del modelo: {acc:.2f}")
-
     return model
 
 def predecir_resultado(modelo, datos_partido):
@@ -408,12 +371,8 @@ def actualizar_datos_partidos():
                 print(f"Error al convertir hora: {ex}")
                 hora_valor = datetime.utcnow()
         partido["hora"] = hora_valor.strftime("%Y-%m-%d %H:%M:%S")
-        
-        # 1) Insertar primero la liga
         insertar_league(partido["liga"], partido["deporte"])
-        # 2) Luego insertar el partido
         insertar_partido(partido["nombre_partido"], partido["liga"], partido["hora"])
-        
         result = manual_upsert("partidos", partido, ["nombre_partido", "hora"])
         print(f"Registro en partidos {partido['nombre_partido']}: {result}")
     return {"status": "Datos actualizados correctamente"}
@@ -432,7 +391,6 @@ def procesar_predicciones():
         else:
             hora_dt = hora_valor
         partido["hora"] = hora_dt.strftime("%Y-%m-%d %H:%M:%S")
-        
         resultado, confianza = predecir_resultado(model, partido)
         prediccion = {
             "deporte": partido["deporte"],
