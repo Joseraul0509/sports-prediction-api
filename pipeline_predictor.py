@@ -10,37 +10,34 @@ from supabase import create_client, Client
 import random
 import time
 
-# Cargar variables de entorno (asegúrate de tener un archivo .env configurado)
+# Cargar variables de entorno
 from dotenv import load_dotenv
 load_dotenv()
 
-# Conexión a Supabase (usando variables de entorno definidas en .env)
+# Conexión a Supabase
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # Claves API
 api_sports_key = os.getenv("API_SPORTS_KEY")
-# Para NBA, se integran además las URL de la API de balldontlie (la API es pública)
+# Football Data API se omite
 balldontlie_base_url = "https://api.balldontlie.io/v1"
-balldontlie_api_key = "5293380d-9c4f-4e89-be15-bf19b1042182"  # Nota: Se inserta en el código si fuera necesaria la autorización
+balldontlie_api_key = "5293380d-9c4f-4e89-be15-bf19b1042182"  # No se usa header pues es pública
 
-# --- VARIABLES DE EJEMPLO PARA CONSULTAS REALES (reemplazar según corresponda) ---
-# Fútbol (Fulbot)
+# --- Variables de ejemplo para consultas reales (reemplazar según corresponda) ---
+# Fútbol
 football_league_id = "39"  # Ejemplo: Premier League
 football_team_id = "33"    # Ejemplo: Manchester United
 football_season = "2023"
-
 # NBA
-nba_league_id = "1"        # Ejemplo (depende de la API)
+nba_league_id = "1"        # Ejemplo (ajustar según tu cuenta)
 nba_team_id = "14"         # Ejemplo: Golden State Warriors (cambiar según datos reales)
 nba_season = "2023-2024"
-
 # MLB
 mlb_league_id = "1"        # Ejemplo
 mlb_team_id = "1"          # Ejemplo
 mlb_season = "2023"
-
 # NHL
 nhl_league_id = "1"        # Ejemplo
 nhl_team_id = "1"          # Ejemplo
@@ -114,7 +111,7 @@ def manual_upsert(table_name: str, data: dict, conflict_columns: list, retries=3
 
 # CONFIGURACIÓN DE APIs DEPORTIVAS
 
-# Para Fútbol: Se utiliza API-Sports (v3) y OpenLigaDB.
+# Para Fútbol: se utiliza API-Sports (v3) y OpenLigaDB.
 OPENLIGADB_ENDPOINTS = [
     "https://api.openligadb.de/getmatchdata/dfb/2024/5",
     "https://api.openligadb.de/getmatchdata/bl2/2024/28",
@@ -124,8 +121,8 @@ OPENLIGADB_ENDPOINTS = [
     "https://api.openligadb.de/getmatchdata/ucl2024/2024/4",
     "https://api.openligadb.de/getmatchdata/uel24/2024/12"
 ]
-# Para NBA: Fuente principal: API-Sports (v2, con fallback v1) y se complementa con la API de balldontlie.
-# Para MLB y NHL: se usan los endpoints de API-Sports.
+# Para NBA: API-Sports v2 (con fallback v1) y complementada con balldontlie.
+# Para MLB y NHL: se usan API-Sports.
 
 def get_today():
     return datetime.utcnow().strftime("%Y-%m-%d")
@@ -137,7 +134,6 @@ def obtener_datos_futbol():
     datos = []
     today = get_today()
     try:
-        # Obtener fixtures del día desde API-Sports (v3)
         url_api = f"https://v3.football.api-sports.io/fixtures?date={today}"
         headers_api = {"x-apisports-key": api_sports_key}
         resp = requests.get(url_api, headers=headers_api, timeout=10)
@@ -145,55 +141,71 @@ def obtener_datos_futbol():
             respuesta = resp.json().get("response", [])
             print(f"Obtenidos {len(respuesta)} fixtures de API-Sports fútbol")
             for fixture in respuesta:
-                info = fixture.get("fixture", {})
                 teams = fixture.get("teams", {})
                 registro = {
                     "nombre_partido": teams.get("home", {}).get("name", "Partido Desconocido") + " vs " +
                                       teams.get("away", {}).get("name", ""),
                     "liga": fixture.get("league", {}).get("name", "Desconocida"),
                     "deporte": "futbol",
-                    "goles_local_prom": None,  # A rellenar con estadísticas reales
+                    "goles_local_prom": None,  # se rellenará con estadísticas reales
                     "goles_visita_prom": None,
                     "racha_local": None,
                     "racha_visita": None,
                     "clima": 1,
-                    "importancia_partido": None,  # Se obtiene mediante análisis de fixture
-                    "hora": info.get("date", datetime.utcnow().isoformat())
+                    "importancia_partido": None,
+                    "hora": fixture.get("fixture", {}).get("date", datetime.utcnow().isoformat())
                 }
-                # Obtener estadísticas reales para cada equipo usando el endpoint de statistics:
-                # Ejemplo para el equipo local (se requieren valores reales de team_id, league_id y season)
+                # Obtener estadísticas reales del fixture para el equipo local
                 local_stats_url = f"https://v3.football.api-sports.io/teams/statistics?league={football_league_id}&team={teams.get('home', {}).get('id', football_team_id)}&season={football_season}"
                 try:
                     stats_resp = requests.get(local_stats_url, headers=headers_api, timeout=10)
                     if stats_resp.status_code == 200:
-                        stats = stats_resp.json().get("response", {})
-                        # Suponemos que stats incluye "fixtures" con claves "goals" y "form" (ajustar según la respuesta real)
-                        registro["goles_local_prom"] = stats.get("fixtures", {}).get("goals", {}).get("for", None)
-                        registro["racha_local"] = stats.get("fixtures", {}).get("streak", None)
+                        response_data = stats_resp.json().get("response")
+                        if isinstance(response_data, list) and len(response_data) > 0:
+                            stats = response_data[0].get("fixtures", {})
+                        elif isinstance(response_data, dict):
+                            stats = response_data.get("fixtures", {})
+                        else:
+                            stats = {}
+                        registro["goles_local_prom"] = stats.get("goals", {}).get("for", 0)
+                        registro["racha_local"] = stats.get("streak", 0)
                     else:
-                        print("Error en estadísticas de equipo local:", stats_resp.status_code)
+                        print("Error en estadísticas fútbol local:", stats_resp.status_code)
+                        registro["goles_local_prom"] = 0
+                        registro["racha_local"] = 0
                 except Exception as e:
-                    print("Excepción al obtener estadísticas local:", e)
-                # De forma similar, obtener para el visitante
+                    print("Excepción al obtener estadísticas fútbol local:", e)
+                    registro["goles_local_prom"] = 0
+                    registro["racha_local"] = 0
+                # Para el visitante (similar)
                 away_stats_url = f"https://v3.football.api-sports.io/teams/statistics?league={football_league_id}&team={teams.get('away', {}).get('id', football_team_id)}&season={football_season}"
                 try:
                     stats_resp = requests.get(away_stats_url, headers=headers_api, timeout=10)
                     if stats_resp.status_code == 200:
-                        stats = stats_resp.json().get("response", {})
-                        registro["goles_visita_prom"] = stats.get("fixtures", {}).get("goals", {}).get("for", None)
-                        registro["racha_visita"] = stats.get("fixtures", {}).get("streak", None)
+                        response_data = stats_resp.json().get("response")
+                        if isinstance(response_data, list) and len(response_data) > 0:
+                            stats = response_data[0].get("fixtures", {})
+                        elif isinstance(response_data, dict):
+                            stats = response_data.get("fixtures", {})
+                        else:
+                            stats = {}
+                        registro["goles_visita_prom"] = stats.get("goals", {}).get("for", 0)
+                        registro["racha_visita"] = stats.get("streak", 0)
                     else:
-                        print("Error en estadísticas de equipo visitante:", stats_resp.status_code)
+                        print("Error en estadísticas fútbol visitante:", stats_resp.status_code)
+                        registro["goles_visita_prom"] = 0
+                        registro["racha_visita"] = 0
                 except Exception as e:
-                    print("Excepción al obtener estadísticas visitante:", e)
-                # Importancia de partido y estado de alineación se derivan de un análisis del fixture (aquí se deja como None)
-                registro["importancia_partido"] = 3
+                    print("Excepción al obtener estadísticas fútbol visitante:", e)
+                    registro["goles_visita_prom"] = 0
+                    registro["racha_visita"] = 0
+                registro["importancia_partido"] = 3  # Este valor se podría derivar de un análisis más profundo
                 datos.append(registro)
         else:
             print("Error en API-Sports fútbol:", resp.status_code, resp.text)
     except Exception as e:
         print("Excepción en API-Sports fútbol:", e)
-    # Complemento: Obtener fixtures de OpenLigaDB (se mantienen datos básicos; aquí no se obtienen parámetros adicionales reales)
+    # Complemento: OpenLigaDB (datos básicos, sin estadísticas específicas)
     for endpoint in OPENLIGADB_ENDPOINTS:
         try:
             resp = requests.get(endpoint, timeout=10)
@@ -226,7 +238,6 @@ def obtener_datos_nba():
     datos = []
     today = get_today()
     success = False
-    # Fuente principal: API-Sports NBA v2 (ejemplo: obtener estadísticas reales)
     try:
         url_api = f"https://v2.nba.api-sports.io/games?date={today}"
         headers_api = {"x-apisports-key": api_sports_key}
@@ -240,31 +251,41 @@ def obtener_datos_nba():
                         print("Elemento inesperado en API-Sports NBA (v2):", game)
                         continue
                     equipos = game.get("teams", {})
-                    # Obtener estadísticas reales del equipo local usando endpoint de estadísticas
+                    # Para obtener estadísticas reales, se consulta el endpoint de estadísticas de equipos (local y visitante)
                     nba_stats_url_local = f"https://v2.nba.api-sports.io/teams/statistics?league={nba_league_id}&team={equipos.get('home', {}).get('id', nba_team_id)}&season={nba_season}"
                     try:
                         stats_local_resp = requests.get(nba_stats_url_local, headers=headers_api, timeout=10)
                         if stats_local_resp.status_code == 200:
-                            stats_local = stats_local_resp.json().get("response", {})
+                            response_data = stats_local_resp.json().get("response")
+                            if isinstance(response_data, list) and len(response_data) > 0:
+                                stats_local = response_data[0].get("games", {})
+                            elif isinstance(response_data, dict):
+                                stats_local = response_data.get("games", {})
+                            else:
+                                stats_local = {}
                         else:
                             print("Error en estadísticas NBA local:", stats_local_resp.status_code)
                             stats_local = {}
                     except Exception as e:
                         print("Excepción en estadísticas NBA local:", e)
                         stats_local = {}
-                    # Similar para el visitante
                     nba_stats_url_away = f"https://v2.nba.api-sports.io/teams/statistics?league={nba_league_id}&team={equipos.get('away', {}).get('id', nba_team_id)}&season={nba_season}"
                     try:
                         stats_away_resp = requests.get(nba_stats_url_away, headers=headers_api, timeout=10)
                         if stats_away_resp.status_code == 200:
-                            stats_away = stats_away_resp.json().get("response", {})
+                            response_data = stats_away_resp.json().get("response")
+                            if isinstance(response_data, list) and len(response_data) > 0:
+                                stats_away = response_data[0].get("games", {})
+                            elif isinstance(response_data, dict):
+                                stats_away = response_data.get("games", {})
+                            else:
+                                stats_away = {}
                         else:
                             print("Error en estadísticas NBA visitante:", stats_away_resp.status_code)
                             stats_away = {}
                     except Exception as e:
                         print("Excepción en estadísticas NBA visitante:", e)
                         stats_away = {}
-                    # Extraer puntajes básicos desde API-Sports
                     score_home = game.get("scores", {}).get("home", 100)
                     if isinstance(score_home, dict):
                         score_home = score_home.get("points", 100)
@@ -276,12 +297,12 @@ def obtener_datos_nba():
                                           equipos.get("away", {}).get("name", ""),
                         "liga": game.get("league", {}).get("name", "NBA"),
                         "deporte": "nba",
-                        "goles_local_prom": float(score_home) / 10,  # Aquí se interpretan los puntos
+                        "goles_local_prom": float(score_home) / 10,  # Se interpretan los puntos
                         "goles_visita_prom": float(score_away) / 10,
-                        "racha_local": stats_local.get("fixtures", {}).get("streak", None),
-                        "racha_visita": stats_away.get("fixtures", {}).get("streak", None),
+                        "racha_local": stats_local.get("streak", 0),
+                        "racha_visita": stats_away.get("streak", 0),
                         "clima": 1,
-                        "importancia_partido": 3,  # Se podría derivar de la información del fixture
+                        "importancia_partido": 3,
                         "hora": game.get("date", datetime.utcnow().isoformat())
                     }
                     datos.append(registro)
@@ -292,7 +313,6 @@ def obtener_datos_nba():
             print("Error en API-Sports NBA (v2):", resp.status_code, resp.text)
     except Exception as e:
         print("Excepción en API-Sports NBA (v2):", e)
-    # Fallback: si v2 no funciona, intentar con la URL alternativa de Basketball API (v1)
     if not success:
         try:
             url_api = f"https://v1.basketball.api-sports.io/games?date={today}"
@@ -333,7 +353,7 @@ def obtener_datos_nba():
                 print("Error en API-Sports NBA (v1):", resp.status_code, resp.text)
         except Exception as e:
             print("Excepción en API-Sports NBA (v1):", e)
-    # Complemento: Utilizar la API de balldontlie para obtener juegos y estadísticas reales
+    # Complemento: API de balldontlie para NBA (no se envían headers)
     try:
         url_bd = f"{balldontlie_base_url}/games"
         params = {"start_date": today, "end_date": today, "per_page": 100}
@@ -453,80 +473,90 @@ def obtener_datos_actualizados():
 # Funciones para parametrización adicional con datos reales
 # -------------------------------
 def agregar_parametros_adicionales(registro):
-    # Para cada deporte, se hace una llamada real al endpoint de estadísticas de la temporada.
-    # Los siguientes ejemplos usan endpoints de API-Sports con valores de ejemplo para {league_id}, {team_id} y {season}.
     deporte = registro.get("deporte", "").lower()
     headers_api = {"x-apisports-key": api_sports_key}
     if deporte == "futbol":
-        # Ejemplo: consultar estadísticas para el equipo local
-        team_id = registro.get("team_local_id", football_team_id)  # Debe estar presente en el fixture; se usa un valor por defecto
-        url_stats = f"https://v3.football.api-sports.io/teams/statistics?league={football_league_id}&team={team_id}&season={football_season}"
+        team_local = registro.get("team_local_id", football_team_id)
+        url_stats = f"https://v3.football.api-sports.io/teams/statistics?league={football_league_id}&team={team_local}&season={football_season}"
         try:
             resp = requests.get(url_stats, headers=headers_api, timeout=10)
-            if resp.status_code == 200:
-                stats = resp.json().get("response", {}).get("fixtures", {})
-                registro["param_1"] = stats.get("goals", {}).get("for", None)    # goles anotados local promedio
-                registro["param_2"] = stats.get("goals", {}).get("against", None)  # goles permitidos local promedio
-                registro["racha_vict_local"] = stats.get("streak", None)           # racha de victorias local
-                registro["ultimos_5_local"] = stats.get("form", "-----")           # Ultimos 5 resultados (string, se debe parsear)
-                registro["param_3"] = stats.get("goals", {}).get("for", None)        # Se usa igual para visitante (puedes ajustar)
-                registro["param_4"] = stats.get("goals", {}).get("against", None)
-                registro["racha_vict_visit"] = stats.get("streak", None)
-                registro["ultimos_5_visitante"] = stats.get("form", "-----")
+            response_data = resp.json().get("response")
+            if isinstance(response_data, list) and len(response_data) > 0:
+                stats = response_data[0].get("fixtures", {})
+            elif isinstance(response_data, dict):
+                stats = response_data.get("fixtures", {})
             else:
-                print("Error en estadísticas fútbol:", resp.status_code, resp.text)
-                registro["param_1"] = registro["param_2"] = registro["param_3"] = registro["param_4"] = 0
-                registro["racha_vict_local"] = registro["racha_vict_visit"] = 0
-                registro["ultimos_5_local"] = registro["ultimos_5_visitante"] = [0]*5
+                stats = {}
+            registro["param_1"] = stats.get("goals", {}).get("for", 0)         # goles anotados local
+            registro["param_2"] = stats.get("goals", {}).get("against", 0)     # goles permitidos local
+            registro["racha_vict_local"] = stats.get("streak", 0)
+            # Se asume que la clave "form" contiene una cadena con resultados, convertir a lista si es posible
+            form = stats.get("form", "-----")
+            if isinstance(form, str):
+                registro["ultimos_5_local"] = list(form)[-5:]
+            else:
+                registro["ultimos_5_local"] = form
         except Exception as e:
-            print("Excepción en estadísticas fútbol:", e)
-            registro["param_1"] = registro["param_2"] = registro["param_3"] = registro["param_4"] = 0
-            registro["racha_vict_local"] = registro["racha_vict_visit"] = 0
-            registro["ultimos_5_local"] = registro["ultimos_5_visitante"] = [0]*5
-        registro["alineacion_estado"] = 1  # Se podría obtener de otro endpoint
+            print("Excepción en estadísticas fútbol (local):", e)
+            registro["param_1"] = registro["param_2"] = 0
+            registro["racha_vict_local"] = 0
+            registro["ultimos_5_local"] = [0]*5
+        # Para visitante se puede repetir o hacer otra consulta (aquí se replican los mismos valores)
+        registro["param_3"] = registro["param_1"]
+        registro["param_4"] = registro["param_2"]
+        registro["racha_vict_visit"] = registro["racha_vict_local"]
+        registro["ultimos_5_visitante"] = registro["ultimos_5_local"]
+        registro["alineacion_estado"] = 1  # Valor fijo, o se puede obtener de otro endpoint
     elif deporte == "nba":
-        team_id = registro.get("team_local_id", nba_team_id)
-        url_stats = f"https://v2.nba.api-sports.io/teams/statistics?league={nba_league_id}&team={team_id}&season={nba_season}"
+        team_local = registro.get("team_local_id", nba_team_id)
+        url_stats = f"https://v2.nba.api-sports.io/teams/statistics?league={nba_league_id}&team={team_local}&season={nba_season}"
         try:
             resp = requests.get(url_stats, headers=headers_api, timeout=10)
-            if resp.status_code == 200:
-                stats = resp.json().get("response", {}).get("games", {})
-                registro["param_1"] = stats.get("points", {}).get("for", None)    # puntos anotados local promedio
-                registro["param_2"] = stats.get("points", {}).get("against", None)  # puntos permitidos local promedio
-                registro["racha_vict_local"] = stats.get("streak", None)
-                registro["ultimos_5_local"] = stats.get("form", "-----")
+            response_data = resp.json().get("response")
+            if isinstance(response_data, list) and len(response_data) > 0:
+                stats = response_data[0].get("games", {})
+            elif isinstance(response_data, dict):
+                stats = response_data.get("games", {})
             else:
-                print("Error en estadísticas NBA (local):", resp.status_code, resp.text)
-                registro["param_1"] = registro["param_2"] = 0
-                registro["racha_vict_local"] = 0
-                registro["ultimos_5_local"] = [0]*5
+                stats = {}
+            registro["param_1"] = stats.get("points", {}).get("for", 0)         # puntos anotados local
+            registro["param_2"] = stats.get("points", {}).get("against", 0)     # puntos permitidos local
+            registro["racha_vict_local"] = stats.get("streak", 0)
+            form = stats.get("form", "-----")
+            if isinstance(form, str):
+                registro["ultimos_5_local"] = list(form)[-5:]
+            else:
+                registro["ultimos_5_local"] = form
         except Exception as e:
             print("Excepción en estadísticas NBA (local):", e)
             registro["param_1"] = registro["param_2"] = 0
             registro["racha_vict_local"] = 0
             registro["ultimos_5_local"] = [0]*5
-        # Para el visitante, se asume lo mismo (en la práctica harías una llamada con team_id del visitante)
         registro["param_3"] = registro["param_1"]
         registro["param_4"] = registro["param_2"]
         registro["racha_vict_visit"] = registro["racha_vict_local"]
         registro["ultimos_5_visitante"] = registro["ultimos_5_local"]
         registro["alineacion_estado"] = 1
     elif deporte == "mlb":
-        team_id = registro.get("team_local_id", mlb_team_id)
-        url_stats = f"https://v1.baseball.api-sports.io/teams/statistics?league={mlb_league_id}&team={team_id}&season={mlb_season}"
+        team_local = registro.get("team_local_id", mlb_team_id)
+        url_stats = f"https://v1.baseball.api-sports.io/teams/statistics?league={mlb_league_id}&team={team_local}&season={mlb_season}"
         try:
             resp = requests.get(url_stats, headers=headers_api, timeout=10)
-            if resp.status_code == 200:
-                stats = resp.json().get("response", {}).get("games", {})
-                registro["param_1"] = stats.get("runs", {}).get("for", None)      # carreras anotadas local promedio
-                registro["param_2"] = stats.get("runs", {}).get("against", None)    # carreras permitidas local promedio
-                registro["racha_vict_local"] = stats.get("streak", None)
-                registro["ultimos_5_local"] = stats.get("form", "-----")
+            response_data = resp.json().get("response")
+            if isinstance(response_data, list) and len(response_data) > 0:
+                stats = response_data[0].get("games", {})
+            elif isinstance(response_data, dict):
+                stats = response_data.get("games", {})
             else:
-                print("Error en estadísticas MLB (local):", resp.status_code, resp.text)
-                registro["param_1"] = registro["param_2"] = 0
-                registro["racha_vict_local"] = 0
-                registro["ultimos_5_local"] = [0]*5
+                stats = {}
+            registro["param_1"] = stats.get("runs", {}).get("for", 0)           # carreras anotadas local
+            registro["param_2"] = stats.get("runs", {}).get("against", 0)       # carreras permitidas local
+            registro["racha_vict_local"] = stats.get("streak", 0)
+            form = stats.get("form", "-----")
+            if isinstance(form, str):
+                registro["ultimos_5_local"] = list(form)[-5:]
+            else:
+                registro["ultimos_5_local"] = form
         except Exception as e:
             print("Excepción en estadísticas MLB (local):", e)
             registro["param_1"] = registro["param_2"] = 0
@@ -538,21 +568,25 @@ def agregar_parametros_adicionales(registro):
         registro["ultimos_5_visitante"] = registro["ultimos_5_local"]
         registro["alineacion_estado"] = 1
     elif deporte == "nhl":
-        team_id = registro.get("team_local_id", nhl_team_id)
-        url_stats = f"https://v1.hockey.api-sports.io/teams/statistics?league={nhl_league_id}&team={team_id}&season={nhl_season}"
+        team_local = registro.get("team_local_id", nhl_team_id)
+        url_stats = f"https://v1.hockey.api-sports.io/teams/statistics?league={nhl_league_id}&team={team_local}&season={nhl_season}"
         try:
             resp = requests.get(url_stats, headers=headers_api, timeout=10)
-            if resp.status_code == 200:
-                stats = resp.json().get("response", {}).get("games", {})
-                registro["param_1"] = stats.get("goals", {}).get("for", None)      # goles anotados local promedio
-                registro["param_2"] = stats.get("goals", {}).get("against", None)    # goles permitidos local promedio
-                registro["racha_vict_local"] = stats.get("streak", None)
-                registro["ultimos_5_local"] = stats.get("form", "-----")
+            response_data = resp.json().get("response")
+            if isinstance(response_data, list) and len(response_data) > 0:
+                stats = response_data[0].get("games", {})
+            elif isinstance(response_data, dict):
+                stats = response_data.get("games", {})
             else:
-                print("Error en estadísticas NHL (local):", resp.status_code, resp.text)
-                registro["param_1"] = registro["param_2"] = 0
-                registro["racha_vict_local"] = 0
-                registro["ultimos_5_local"] = [0]*5
+                stats = {}
+            registro["param_1"] = stats.get("goals", {}).get("for", 0)           # goles anotados local
+            registro["param_2"] = stats.get("goals", {}).get("against", 0)       # goles permitidos local
+            registro["racha_vict_local"] = stats.get("streak", 0)
+            form = stats.get("form", "-----")
+            if isinstance(form, str):
+                registro["ultimos_5_local"] = list(form)[-5:]
+            else:
+                registro["ultimos_5_local"] = form
         except Exception as e:
             print("Excepción en estadísticas NHL (local):", e)
             registro["param_1"] = registro["param_2"] = 0
@@ -597,7 +631,6 @@ def obtener_datos_actualizados():
 def obtener_datos_entrenamiento():
     datos_actuales = obtener_datos_actualizados()
     print(f"Número de registros obtenidos para entrenamiento: {len(datos_actuales)}")
-    # Agregar parámetros adicionales reales para cada deporte
     datos_ext = [agregar_parametros_adicionales(d) for d in datos_actuales]
     simulated_data = datos_ext * 10  # Aumenta la cantidad de registros
     for d in simulated_data:
@@ -606,22 +639,22 @@ def obtener_datos_entrenamiento():
     for d in simulated_data:
         try:
             row = {
-                "goles_local_prom": float(d.get("goles_local_prom", 1.5)),
-                "goles_visita_prom": float(d.get("goles_visita_prom", 1.2)),
-                "racha_local": int(d.get("racha_local", 3)),
-                "racha_visita": int(d.get("racha_visita", 2)),
-                "clima": int(d.get("clima", 1)),
-                "importancia_partido": int(d.get("importancia_partido", 3)),
-                "resultado": int(d["resultado"]),
-                "param_1": float(d.get("param_1", 0.0)),
-                "param_2": float(d.get("param_2", 0.0)),
-                "param_3": float(d.get("param_3", 0.0)),
-                "param_4": float(d.get("param_4", 0.0)),
-                "param_5": int(d.get("racha_vict_local", 0)),
-                "param_6": int(d.get("racha_vict_visit", 0)),
+                "goles_local_prom": float(d.get("goles_local_prom") or 0.0),
+                "goles_visita_prom": float(d.get("goles_visita_prom") or 0.0),
+                "racha_local": int(d.get("racha_local") or 0),
+                "racha_visita": int(d.get("racha_visita") or 0),
+                "clima": int(d.get("clima") or 1),
+                "importancia_partido": int(d.get("importancia_partido") or 0),
+                "resultado": int(d.get("resultado") or 0),
+                "param_1": float(d.get("param_1") or 0.0),
+                "param_2": float(d.get("param_2") or 0.0),
+                "param_3": float(d.get("param_3") or 0.0),
+                "param_4": float(d.get("param_4") or 0.0),
+                "param_5": int(d.get("racha_vict_local") or 0),
+                "param_6": int(d.get("racha_vict_visit") or 0),
                 "param_7": float(sum(d.get("ultimos_5_local", [0]*5)))/5,
                 "param_8": float(sum(d.get("ultimos_5_visitante", [0]*5)))/5,
-                "param_9": int(d.get("alineacion_estado", 1))
+                "param_9": int(d.get("alineacion_estado") or 0)
             }
             training_rows.append(row)
         except Exception as e:
@@ -680,16 +713,15 @@ def predecir_resultado(modelo, datos_partido):
         "importancia_partido": datos_partido["importancia_partido"]
     }])
     pred = modelo.predict(df)[0]
-    # Se amplían las opciones de predicción: 
-    # Además de la predicción básica, se añade una predicción de "over/under" y "handicap".
+    # Amplia las opciones de predicción para incluir datos de over/under y handicap
     opciones = {
-        0: ("Gana Local", 0.75, "Alta anotación", 0.72, "Local con ventaja", 0.71),
-        1: ("Empate", 0.70, "Baja anotación", 0.70, "Ninguna ventaja", 0.70),
-        2: ("Gana Visitante", 0.75, "Alta anotación", 0.72, "Visitante con ventaja", 0.71)
+        0: ("Gana Local", 0.75, "Over", 0.72, "Local +4", 0.71),
+        1: ("Empate", 0.70, "Under", 0.70, "No ventaja", 0.70),
+        2: ("Gana Visitante", 0.75, "Over", 0.72, "Visitante +4", 0.71)
     }
-    # Retornamos una tupla con 3 predicciones: (prediccion, confianza), (over/under, confianza), (handicap, confianza)
     base = opciones.get(pred, ("Indefinido", 0.0, "Sin datos", 0.0, "Sin ventaja", 0.0))
-    return base[0:2]  # Para mantener la estructura original (puedes ajustar para usar todas las predicciones)
+    # Se retorna la predicción básica; se puede ampliar para usar más opciones
+    return base[0:2]
 
 # -------------------------------
 # Funciones para Actualizar Datos y Procesar Predicciones
@@ -734,7 +766,7 @@ def procesar_predicciones():
                 "hora": partido["hora"],
                 "pronostico_1": resultado,
                 "confianza_1": confianza,
-                "pronostico_2": "Menos de 2.5 goles",  # Estos campos se pueden ampliar
+                "pronostico_2": "Menos de 2.5 goles",  # Opciones adicionales se pueden ampliar
                 "confianza_2": 0.70,
                 "pronostico_3": "Ambos no anotan",
                 "confianza_3": 0.65
@@ -747,7 +779,7 @@ def procesar_predicciones():
         return {"message": "Error global en el procesamiento de predicciones"}
 
 # -------------------------------
-# Funciones para integración de datos NBA desde balldontlie
+# Funciones para integración de datos NBA de balldontlie
 # -------------------------------
 def insertar_nba_balldontlie():
     # Insertar equipos de la NBA
