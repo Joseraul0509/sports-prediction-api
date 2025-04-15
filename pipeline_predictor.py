@@ -11,30 +11,36 @@ import random
 import time
 from dotenv import load_dotenv
 
-# Cargar variables de entorno desde .env
+# Cargar variables de entorno
 load_dotenv()
 
-# Conexión a Supabase (debe estar configurado en .env)
+# Conexión a Supabase (configurado en .env)
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # Claves API
-# Se asume que API_SPORTS_KEY y API_FOOTBALL_KEY están configuradas en .env
 API_SPORTS_KEY = os.getenv("API_SPORTS_KEY")
+API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY", API_SPORTS_KEY)
 HEADERS_API_SPORTS = {"x-apisports-key": API_SPORTS_KEY}
-HEADERS_API_FOOTBALL = {"x-apisports-key": os.getenv("API_FOOTBALL_KEY", API_SPORTS_KEY)}
-# La API de balldontlie es pública; no se requiere header.
+HEADERS_API_FOOTBALL = {"x-apisports-key": API_FOOTBALL_KEY}
+# La API de balldontlie es pública.
 balldontlie_base_url = "https://api.balldontlie.io/v1"
 
-# Obtener fecha actual en formato AAAA-MM-DD
+# Función para obtener la fecha actual en formato ISO (UTC)
 def get_today():
+    # Usamos UTC para evitar discrepancias; si deseas convertir a tu zona local,
+    # se puede usar pytz o zoneinfo para ajustar aquí.
     return datetime.utcnow().strftime("%Y-%m-%d")
 
 # --------------------------------------------------
-# Funciones auxiliares para conversión segura
+# Funciones Auxiliares de Conversión y Validación
 # --------------------------------------------------
 def safe_numeric(val):
+    # Si val es un dict, probablemente se esperaba un número y el campo no se extrajo bien.
+    if isinstance(val, dict):
+        print("safe_numeric: Se recibió un dict; se asigna 0.0")
+        return 0.0
     try:
         if val is None:
             return 0.0
@@ -44,7 +50,7 @@ def safe_numeric(val):
         return 0.0
 
 def convert_form_string(form_str):
-    # Mapea resultados: 'W' = 1, 'D' = 0, 'L' = 0. Ajusta según tus necesidades.
+    # Mapear resultados: 'W' = 1, 'D' = 0, 'L' = 0.
     mapping = {'W': 1, 'D': 0, 'L': 0}
     if isinstance(form_str, str):
         return [mapping.get(c, 0) for c in form_str if c in mapping]
@@ -53,9 +59,22 @@ def convert_form_string(form_str):
     return [0] * 5
 
 # --------------------------------------------------
-# Función de upsert con reintentos en Supabase
+# Función para generar un ID único si no se proporciona
+# --------------------------------------------------
+def obtener_id(registro, campo="id"):
+    # Si el registro no tiene un valor para el campo, se genera un uuid
+    valor = registro.get(campo)
+    if not valor:
+        return str(uuid.uuid4())
+    return valor
+
+# --------------------------------------------------
+# Función de upsert con reintentos (para Supabase)
 # --------------------------------------------------
 def manual_upsert(table_name: str, data: dict, conflict_columns: list, retries=3):
+    # Aseguramos que si "id" es requerido y no existe, lo generamos.
+    if "id" not in data or data["id"] is None:
+        data["id"] = str(uuid.uuid4())
     for attempt in range(retries):
         try:
             query = supabase.table(table_name).select("*")
@@ -77,7 +96,7 @@ def manual_upsert(table_name: str, data: dict, conflict_columns: list, retries=3
     return "failed"
 
 # --------------------------------------------------
-# Función para obtener estadísticas reales desde API-SPORTS
+# Función para obtener estadísticas desde API-SPORTS
 # --------------------------------------------------
 def obtener_estadisticas(team_id, league_id, season, deporte):
     if deporte == "futbol":
@@ -112,7 +131,7 @@ def obtener_estadisticas(team_id, league_id, season, deporte):
         return {}
 
 # --------------------------------------------------
-# Funciones para insertar ligas y partidos en Supabase
+# Funciones para insertar ligas y partidos
 # --------------------------------------------------
 def insertar_league(nombre_liga: str, _deporte: str):
     try:
@@ -142,7 +161,10 @@ def insertar_partido(nombre_partido: str, liga: str, hora: str):
             "hora": hora
         }).execute()
         if not existe.data:
+            # Generar id único si no existe
+            record_id = str(uuid.uuid4())
             supabase.table("partidos").insert({
+                "id": record_id,
                 "nombre_partido": nombre_partido,
                 "liga": liga,
                 "hora": hora
@@ -166,24 +188,23 @@ def obtener_datos_futbol():
             for fixture in fixtures:
                 teams = fixture.get("teams", {})
                 league_info = fixture.get("league", {})
-                # Extraer parámetros reales desde la respuesta
                 league_id = str(league_info.get("id", ""))
                 season = league_info.get("season", "")
                 registro = {
-                    "id": fixture.get("fixture", {}).get("id"),
+                    "id": fixture.get("fixture", {}).get("id") or str(uuid.uuid4()),
                     "nombre_partido": teams.get("home", {}).get("name", "Partido Desconocido") + " vs " +
                                       teams.get("away", {}).get("name", ""),
                     "liga": league_info.get("name", "Desconocida"),
                     "deporte": "futbol",
-                    "goles_local_prom": 0,
-                    "goles_visita_prom": 0,
+                    "goles_local_prom": 0.0,
+                    "goles_visita_prom": 0.0,
                     "racha_local": 0,
                     "racha_visita": 0,
                     "clima": 1,
                     "importancia_partido": 3,
                     "hora": fixture.get("fixture", {}).get("date", datetime.utcnow().isoformat())
                 }
-                # Extraer estadísticas para el equipo local
+                # Estadísticas para el equipo local
                 local_id = str(teams.get("home", {}).get("id", ""))
                 stats_local = obtener_estadisticas(local_id, league_id, season, "futbol")
                 registro["goles_local_prom"] = safe_numeric(stats_local.get("fixtures", {}).get("goals", {}).get("for"))
@@ -197,7 +218,11 @@ def obtener_datos_futbol():
                 registro["racha_visita"] = stats_away.get("fixtures", {}).get("streak", 0)
                 form_away = stats_away.get("fixtures", {}).get("form", "-----")
                 registro["ultimos_5_visitante"] = convert_form_string(form_away)[-5:]
-                datos.append(registro)
+                # En caso de faltar datos críticos, si nombre de liga o partido son "Desconocida" o "Partido Desconocido", se ignora
+                if registro["nombre_partido"].strip() == "" or registro["liga"].strip() == "":
+                    print("Registro omitido por datos incompletos:", registro)
+                else:
+                    datos.append(registro)
         else:
             print(f"Error en API-Sports fútbol: {resp.status_code} {resp.text}")
     except Exception as e:
@@ -221,12 +246,12 @@ def obtener_datos_futbol():
                 print(f"Obtenidos {len(fixtures)} fixtures de OpenLigaDB")
                 for partido in fixtures:
                     datos.append({
-                        "id": None,
+                        "id": partido.get("MatchId") or str(uuid.uuid4()),
                         "nombre_partido": partido.get("MatchName", "Partido Desconocido"),
                         "liga": partido.get("League", "Desconocida"),
                         "deporte": "futbol",
-                        "goles_local_prom": partido.get("MatchResults", [{}])[0].get("PointsTeam1", 1.5),
-                        "goles_visita_prom": partido.get("MatchResults", [{}])[0].get("PointsTeam2", 1.2),
+                        "goles_local_prom": safe_numeric(partido.get("MatchResults", [{}])[0].get("PointsTeam1", 1.5)),
+                        "goles_visita_prom": safe_numeric(partido.get("MatchResults", [{}])[0].get("PointsTeam2", 1.2)),
                         "racha_local": 3,
                         "racha_visita": 2,
                         "clima": partido.get("clima", 1),
@@ -264,7 +289,7 @@ def obtener_datos_nba():
                 if isinstance(score_away, dict):
                     score_away = score_away.get("points", 100)
                 registro = {
-                    "id": game.get("fixture", {}).get("id"),
+                    "id": game.get("fixture", {}).get("id") or str(uuid.uuid4()),
                     "nombre_partido": equipos.get("home", {}).get("name", "Partido Desconocido") + " vs " +
                                       equipos.get("away", {}).get("name", ""),
                     "liga": league_info.get("name", "NBA"),
@@ -299,7 +324,7 @@ def obtener_datos_nba():
                 if isinstance(score_away, dict):
                     score_away = score_away.get("points", 100)
                 registro = {
-                    "id": game.get("fixture", {}).get("id"),
+                    "id": game.get("fixture", {}).get("id") or str(uuid.uuid4()),
                     "nombre_partido": equipos.get("home", {}).get("name", "Partido Desconocido") + " vs " +
                                       equipos.get("away", {}).get("name", ""),
                     "liga": game.get("league", {}).get("name", "NBA"),
@@ -318,7 +343,7 @@ def obtener_datos_nba():
             print(f"Error en API-Sports NBA (v1): {resp.status_code} {resp.text}")
     except Exception as e:
         print(f"Excepción en API-Sports NBA (v1): {e}")
-    # Complemento: Usar la API de balldontlie para NBA (sin headers)
+    # Complemento: API de balldontlie (sin headers)
     try:
         url_bd = f"{balldontlie_base_url}/games?start_date={get_today()}&end_date={get_today()}&per_page=100"
         resp_bd = requests.get(url_bd, timeout=10)
@@ -327,7 +352,7 @@ def obtener_datos_nba():
             print(f"Obtenidos {len(games)} juegos de balldontlie para NBA")
             for game in games:
                 registro = {
-                    "id": game.get("id"),
+                    "id": game.get("id") or str(uuid.uuid4()),
                     "nombre_partido": game["home_team"]["full_name"] + " vs " + game["visitor_team"]["full_name"],
                     "liga": "NBA",
                     "deporte": "nba",
@@ -363,7 +388,7 @@ def obtener_datos_deporte_api(deporte):
         if resp.status_code == 200:
             for game in resp.json().get("response", []):
                 registro = {
-                    "id": game.get("id"),
+                    "id": game.get("id") or str(uuid.uuid4()),
                     "nombre_partido": game.get("teams", {}).get("home", {}).get("name", "Equipo Local") +
                                       " vs " +
                                       game.get("teams", {}).get("away", {}).get("name", "Equipo Visitante"),
@@ -391,12 +416,11 @@ def obtener_datos_actualizados():
     for dep in ["MLB", "NHL"]:
         datos.extend(obtener_datos_deporte_api(dep))
     print(f"Total de registros obtenidos de todas las fuentes: {len(datos)}")
-    # Se asegura que cada registro tenga la clave 'goles_local_prom'
     for d in datos:
         if "goles_local_prom" not in d or d["goles_local_prom"] is None:
             d["goles_local_prom"] = 0.0
     return datos if datos else [{
-        "id": None,
+        "id": str(uuid.uuid4()),
         "nombre_partido": "Arsenal vs Chelsea",
         "liga": "Premier League",
         "deporte": "futbol",
@@ -410,65 +434,48 @@ def obtener_datos_actualizados():
     }]
 
 # --------------------------------------------------
-# Función de parametrización adicional usando datos reales
+# Función para agregar parámetros adicionales a cada registro usando datos reales
 # --------------------------------------------------
 def agregar_parametros_adicionales(registro):
     deporte = registro.get("deporte", "").lower()
-    # Se esperan que la información de league_id y season esté incluida en cada fixture si es obtenida de API-Sports
-    # Si no, se usan valores por defecto (0 o cadena vacía)
-    league_id = str(registro.get("league_id", ""))
-    season = registro.get("season", "")
-    if deporte == "futbol":
+    # Se esperan parámetros adicionales que la API de estadísticas pueda proveer.
+    # Si no están disponibles, se asignarán valores por defecto.
+    if deporte in ["futbol", "nba", "mlb", "nhl"]:
+        # En este ejemplo, se intentan obtener datos de estadísticas usando los mismos valores del fixture.
+        # Se asume que la respuesta del fixture ya incluye (o se puede derivar) league_id y season.
+        league_id = str(registro.get("league_id", ""))
+        season = registro.get("season", "")
         team_local = str(registro.get("team_local_id", ""))
-        stats = obtener_estadisticas(team_local, league_id, season, "futbol")
-        registro["param_1"] = safe_numeric(stats.get("fixtures", {}).get("goals", {}).get("for"))
-        registro["param_2"] = safe_numeric(stats.get("fixtures", {}).get("goals", {}).get("against"))
-        registro["racha_vict_local"] = stats.get("fixtures", {}).get("streak", 0)
-        form_local = stats.get("fixtures", {}).get("form", "-----")
-        registro["ultimos_5_local"] = convert_form_string(form_local)[-5:]
+        stats = obtener_estadisticas(team_local, league_id, season, deporte)
+        if deporte == "futbol":
+            registro["param_1"] = safe_numeric(stats.get("fixtures", {}).get("goals", {}).get("for"))
+            registro["param_2"] = safe_numeric(stats.get("fixtures", {}).get("goals", {}).get("against"))
+            registro["racha_vict_local"] = stats.get("fixtures", {}).get("streak", 0)
+            form_local = stats.get("fixtures", {}).get("form", "-----")
+            registro["ultimos_5_local"] = convert_form_string(form_local)[-5:]
+        elif deporte == "nba":
+            registro["param_1"] = safe_numeric(stats.get("games", {}).get("points", {}).get("for"))
+            registro["param_2"] = safe_numeric(stats.get("games", {}).get("points", {}).get("against"))
+            registro["racha_vict_local"] = stats.get("games", {}).get("streak", 0)
+            form_local = stats.get("games", {}).get("form", "-----")
+            registro["ultimos_5_local"] = convert_form_string(form_local)[-5:]
+        elif deporte == "mlb":
+            registro["param_1"] = safe_numeric(stats.get("games", {}).get("runs", {}).get("for"))
+            registro["param_2"] = safe_numeric(stats.get("games", {}).get("runs", {}).get("against"))
+            registro["racha_vict_local"] = stats.get("games", {}).get("streak", 0)
+            form_local = stats.get("games", {}).get("form", "-----")
+            registro["ultimos_5_local"] = convert_form_string(form_local)[-5:]
+        elif deporte == "nhl":
+            registro["param_1"] = safe_numeric(stats.get("games", {}).get("goals", {}).get("for"))
+            registro["param_2"] = safe_numeric(stats.get("games", {}).get("goals", {}).get("against"))
+            registro["racha_vict_local"] = stats.get("games", {}).get("streak", 0)
+            form_local = stats.get("games", {}).get("form", "-----")
+            registro["ultimos_5_local"] = convert_form_string(form_local)[-5:]
+        # Se asignan los mismos valores para parámetros de visitante
         registro["param_3"] = registro["param_1"]
         registro["param_4"] = registro["param_2"]
-        registro["racha_vict_visit"] = registro["racha_vict_local"]
-        registro["ultimos_5_visitante"] = registro["ultimos_5_local"]
-        registro["alineacion_estado"] = 1
-    elif deporte == "nba":
-        team_local = str(registro.get("team_local_id", ""))
-        stats = obtener_estadisticas(team_local, league_id, season, "nba")
-        registro["param_1"] = safe_numeric(stats.get("games", {}).get("points", {}).get("for"))
-        registro["param_2"] = safe_numeric(stats.get("games", {}).get("points", {}).get("against"))
-        registro["racha_vict_local"] = stats.get("games", {}).get("streak", 0)
-        form_local = stats.get("games", {}).get("form", "-----")
-        registro["ultimos_5_local"] = convert_form_string(form_local)[-5:]
-        registro["param_3"] = registro["param_1"]
-        registro["param_4"] = registro["param_2"]
-        registro["racha_vict_visit"] = registro["racha_vict_local"]
-        registro["ultimos_5_visitante"] = registro["ultimos_5_local"]
-        registro["alineacion_estado"] = 1
-    elif deporte == "mlb":
-        team_local = str(registro.get("team_local_id", ""))
-        stats = obtener_estadisticas(team_local, league_id, season, "mlb")
-        registro["param_1"] = safe_numeric(stats.get("games", {}).get("runs", {}).get("for"))
-        registro["param_2"] = safe_numeric(stats.get("games", {}).get("runs", {}).get("against"))
-        registro["racha_vict_local"] = stats.get("games", {}).get("streak", 0)
-        form_local = stats.get("games", {}).get("form", "-----")
-        registro["ultimos_5_local"] = convert_form_string(form_local)[-5:]
-        registro["param_3"] = registro["param_1"]
-        registro["param_4"] = registro["param_2"]
-        registro["racha_vict_visit"] = registro["racha_vict_local"]
-        registro["ultimos_5_visitante"] = registro["ultimos_5_local"]
-        registro["alineacion_estado"] = 1
-    elif deporte == "nhl":
-        team_local = str(registro.get("team_local_id", ""))
-        stats = obtener_estadisticas(team_local, league_id, season, "nhl")
-        registro["param_1"] = safe_numeric(stats.get("games", {}).get("goals", {}).get("for"))
-        registro["param_2"] = safe_numeric(stats.get("games", {}).get("goals", {}).get("against"))
-        registro["racha_vict_local"] = stats.get("games", {}).get("streak", 0)
-        form_local = stats.get("games", {}).get("form", "-----")
-        registro["ultimos_5_local"] = convert_form_string(form_local)[-5:]
-        registro["param_3"] = registro["param_1"]
-        registro["param_4"] = registro["param_2"]
-        registro["racha_vict_visit"] = registro["racha_vict_local"]
-        registro["ultimos_5_visitante"] = registro["ultimos_5_local"]
+        registro["racha_vict_visit"] = registro.get("racha_vict_local", 0)
+        registro["ultimos_5_visitante"] = registro.get("ultimos_5_local", [0]*5)
         registro["alineacion_estado"] = 1
     else:
         registro["param_1"] = registro["param_2"] = registro["param_3"] = registro["param_4"] = 0.0
@@ -481,36 +488,11 @@ def agregar_parametros_adicionales(registro):
 # --------------------------------------------------
 # Funciones para entrenamiento y predicción
 # --------------------------------------------------
-def obtener_datos_actualizados():
-    datos = []
-    datos.extend(obtener_datos_futbol())
-    datos.extend(obtener_datos_nba())
-    for dep in ["MLB", "NHL"]:
-        datos.extend(obtener_datos_deporte_api(dep))
-    print(f"Total de registros obtenidos de todas las fuentes: {len(datos)}")
-    # Asegurar que cada registro tenga la clave 'goles_local_prom'
-    for d in datos:
-        if "goles_local_prom" not in d or d["goles_local_prom"] is None:
-            d["goles_local_prom"] = 0.0
-    return datos if datos else [{
-        "id": None,
-        "nombre_partido": "Arsenal vs Chelsea",
-        "liga": "Premier League",
-        "deporte": "futbol",
-        "goles_local_prom": 1.8,
-        "goles_visita_prom": 1.2,
-        "racha_local": 4,
-        "racha_visita": 2,
-        "clima": 1,
-        "importancia_partido": 3,
-        "hora": datetime.utcnow().isoformat()
-    }]
-
 def obtener_datos_entrenamiento():
     datos_actuales = obtener_datos_actualizados()
     print(f"Número de registros obtenidos para entrenamiento: {len(datos_actuales)}")
     datos_ext = [agregar_parametros_adicionales(d) for d in datos_actuales]
-    # Para ampliar la muestra (opcional)
+    # Ampliar muestra de entrenamiento (simulación extra)
     simulated_data = datos_ext * 10  
     for d in simulated_data:
         d["resultado"] = random.choice([0, 1, 2])
@@ -531,8 +513,8 @@ def obtener_datos_entrenamiento():
                 "param_4": safe_numeric(d.get("param_4")),
                 "param_5": int(d.get("racha_vict_local") or 0),
                 "param_6": int(d.get("racha_vict_visit") or 0),
-                "param_7": float(sum(convert_form_string(d.get("ultimos_5_local", "-----"))))/5,
-                "param_8": float(sum(convert_form_string(d.get("ultimos_5_visitante", "-----"))))/5,
+                "param_7": float(sum(convert_form_string(d.get("ultimos_5_local", "-----")))) / 5,
+                "param_8": float(sum(convert_form_string(d.get("ultimos_5_visitante", "-----")))) / 5,
                 "param_9": int(d.get("alineacion_estado") or 0)
             }
             training_rows.append(row)
@@ -601,7 +583,6 @@ def predecir_resultado(modelo, datos_partido):
         2: ("Gana Visitante", 0.75, "Over", 0.72, "Visitante +4", 0.71)
     }
     base = opciones.get(pred, ("Indefinido", 0.0, "Sin datos", 0.0, "Sin ventaja", 0.0))
-    # Se retorna la opción básica (predicción y confianza); se puede ampliar para incluir over/under, handicap, etc.
     return base[0:2]
 
 # --------------------------------------------------
@@ -610,10 +591,10 @@ def predecir_resultado(modelo, datos_partido):
 def actualizar_datos_partidos():
     nuevos_datos = obtener_datos_actualizados()
     for partido in nuevos_datos:
-        # Convertir la hora a un formato estándar
-        hora_valor = partido["hora"]
         try:
+            hora_valor = partido["hora"]
             if isinstance(hora_valor, str):
+                # Si la hora viene en ISO, se asume UTC; si necesitas otra zona, aquí se ajusta
                 hora_dt = datetime.fromisoformat(hora_valor)
             else:
                 hora_dt = hora_valor
@@ -649,7 +630,7 @@ def procesar_predicciones():
                 "hora": partido["hora"],
                 "pronostico_1": resultado,
                 "confianza_1": confianza,
-                "pronostico_2": "Menos de 2.5 goles",  # Ejemplo adicional
+                "pronostico_2": "Menos de 2.5 goles",
                 "confianza_2": 0.70,
                 "pronostico_3": "Ambos no anotan",
                 "confianza_3": 0.65
@@ -658,11 +639,11 @@ def procesar_predicciones():
             print(f"Registro en predicciones {prediccion['partido']}: {result}")
         return {"message": "Predicciones generadas correctamente"}
     except Exception as e:
-        print("Error global en el procesamiento de predicciones:", e)
+        print(f"Error global en el procesamiento de predicciones: {e}")
         return {"message": "Error global en el procesamiento de predicciones"}
 
 # --------------------------------------------------
-# Funciones para integrar datos de NBA desde balldontlie (complementario)
+# Funciones para integrar datos NBA complementarios desde balldontlie
 # --------------------------------------------------
 def insertar_nba_balldontlie():
     # Insertar equipos de la NBA
@@ -681,8 +662,8 @@ def insertar_nba_balldontlie():
         else:
             print(f"Error obteniendo equipos de balldontlie: {response.status_code} {response.text}")
     except Exception as e:
-        print("Excepción al obtener equipos de balldontlie:", e)
-    
+        print(f"Excepción al obtener equipos de balldontlie: {e}")
+
     # Insertar juegos del día de balldontlie
     try:
         resp = requests.get(f"{balldontlie_base_url}/games?start_date={get_today()}&end_date={get_today()}&per_page=100", timeout=10)
@@ -691,6 +672,7 @@ def insertar_nba_balldontlie():
             print(f"Obtenidos {len(juegos)} juegos del día de balldontlie")
             for juego in juegos:
                 data_game = {
+                    "id": juego.get("id") or str(uuid.uuid4()),
                     "nombre_partido": juego["home_team"]["full_name"] + " vs " + juego["visitor_team"]["full_name"],
                     "liga": "NBA",
                     "deporte": "nba",
@@ -706,7 +688,7 @@ def insertar_nba_balldontlie():
         else:
             print(f"Error en juegos de balldontlie: {resp.status_code} {resp.text}")
     except Exception as e:
-        print("Excepción en juegos de balldontlie:", e)
+        print(f"Excepción en juegos de balldontlie: {e}")
     
     # Insertar estadísticas de juegos del día de balldontlie en predicciones
     try:
@@ -732,18 +714,18 @@ def insertar_nba_balldontlie():
         else:
             print(f"Error en stats de balldontlie: {resp.status_code} {resp.text}")
     except Exception as e:
-        print("Excepción en stats de balldontlie:", e)
+        print(f"Excepción en stats de balldontlie: {e}")
 
 # --------------------------------------------------
 # Función principal del pipeline
 # --------------------------------------------------
 def ejecutar_pipeline():
     try:
-        print("Iniciando actualización de partidos y ligas...")
+        print("=== Iniciando actualización de partidos y ligas ===")
         actualizar_datos_partidos()
-        print("Integrando datos complementarios de NBA desde balldontlie...")
+        print("=== Integrando datos complementarios de NBA desde balldontlie ===")
         insertar_nba_balldontlie()
-        print("Iniciando procesamiento de predicciones...")
+        print("=== Ejecutando procesamiento de predicciones ===")
         procesar_predicciones()
         print("Pipeline ejecutado correctamente.")
     except Exception as e:
