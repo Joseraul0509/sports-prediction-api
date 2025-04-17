@@ -1,6 +1,6 @@
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import pandas as pd
 import xgboost as xgb
 from sklearn.model_selection import train_test_split
@@ -11,34 +11,35 @@ import random
 import time
 from dotenv import load_dotenv
 
-# Cargar variables de entorno
 load_dotenv()
 
-# Conexión a Supabase (configurado en .env)
+# Conexión a Supabase (verifica que SUPABASE_URL y SUPABASE_KEY estén en .env)
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Claves API
+# Claves API y Headers (se usan para API-Sports; para fútbol se puede usar API_FOOTBALL_KEY si se requiere)
 API_SPORTS_KEY = os.getenv("API_SPORTS_KEY")
 API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY", API_SPORTS_KEY)
 HEADERS_API_SPORTS = {"x-apisports-key": API_SPORTS_KEY}
 HEADERS_API_FOOTBALL = {"x-apisports-key": API_FOOTBALL_KEY}
-# La API de balldontlie es pública.
+# La API de balldontlie es pública
 balldontlie_base_url = "https://api.balldontlie.io/v1"
 
-# Función para obtener la fecha actual en formato ISO (UTC)
+# Ajuste de zona horaria:
+# Aquí puedes ajustar la función get_today. Actualmente se usa UTC.
 def get_today():
-    # Usamos UTC para evitar discrepancias; si deseas convertir a tu zona local,
-    # se puede usar pytz o zoneinfo para ajustar aquí.
-    return datetime.utcnow().strftime("%Y-%m-%d")
+    # Ejemplo: Si deseas usar la hora local (por ejemplo, "America/New_York"):
+    # from zoneinfo import ZoneInfo
+    # return datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 # --------------------------------------------------
-# Funciones Auxiliares de Conversión y Validación
+# Funciones auxiliares para conversión segura
 # --------------------------------------------------
 def safe_numeric(val):
-    # Si val es un dict, probablemente se esperaba un número y el campo no se extrajo bien.
     if isinstance(val, dict):
+        # Se ha recibido un dict cuando se esperaba un valor numérico: se registra y se retorna 0.0.
         print("safe_numeric: Se recibió un dict; se asigna 0.0")
         return 0.0
     try:
@@ -50,7 +51,6 @@ def safe_numeric(val):
         return 0.0
 
 def convert_form_string(form_str):
-    # Mapear resultados: 'W' = 1, 'D' = 0, 'L' = 0.
     mapping = {'W': 1, 'D': 0, 'L': 0}
     if isinstance(form_str, str):
         return [mapping.get(c, 0) for c in form_str if c in mapping]
@@ -58,21 +58,15 @@ def convert_form_string(form_str):
         return form_str
     return [0] * 5
 
-# --------------------------------------------------
-# Función para generar un ID único si no se proporciona
-# --------------------------------------------------
 def obtener_id(registro, campo="id"):
-    # Si el registro no tiene un valor para el campo, se genera un uuid
     valor = registro.get(campo)
-    if not valor:
-        return str(uuid.uuid4())
-    return valor
+    return valor if valor else str(uuid.uuid4())
 
 # --------------------------------------------------
-# Función de upsert con reintentos (para Supabase)
+# Función de upsert con reintentos en Supabase
 # --------------------------------------------------
 def manual_upsert(table_name: str, data: dict, conflict_columns: list, retries=3):
-    # Aseguramos que si "id" es requerido y no existe, lo generamos.
+    # Para la tabla "partidos", aseguramos que el id sea de tipo texto
     if "id" not in data or data["id"] is None:
         data["id"] = str(uuid.uuid4())
     for attempt in range(retries):
@@ -96,7 +90,7 @@ def manual_upsert(table_name: str, data: dict, conflict_columns: list, retries=3
     return "failed"
 
 # --------------------------------------------------
-# Función para obtener estadísticas desde API-SPORTS
+# Función para obtener estadísticas reales desde API-SPORTS
 # --------------------------------------------------
 def obtener_estadisticas(team_id, league_id, season, deporte):
     if deporte == "futbol":
@@ -131,7 +125,7 @@ def obtener_estadisticas(team_id, league_id, season, deporte):
         return {}
 
 # --------------------------------------------------
-# Funciones para insertar ligas y partidos
+# Funciones para insertar ligas y partidos en Supabase
 # --------------------------------------------------
 def insertar_league(nombre_liga: str, _deporte: str):
     try:
@@ -161,14 +155,13 @@ def insertar_partido(nombre_partido: str, liga: str, hora: str):
             "hora": hora
         }).execute()
         if not existe.data:
-            # Generar id único si no existe
-            record_id = str(uuid.uuid4())
-            supabase.table("partidos").insert({
-                "id": record_id,
+            registro = {
+                "id": str(uuid.uuid4()),
                 "nombre_partido": nombre_partido,
                 "liga": liga,
                 "hora": hora
-            }).execute()
+            }
+            supabase.table("partidos").insert(registro).execute()
             print(f"Partido insertado: {nombre_partido}")
     except Exception as e:
         print(f"Error al insertar partido {nombre_partido}: {e}")
@@ -195,6 +188,7 @@ def obtener_datos_futbol():
                     "nombre_partido": teams.get("home", {}).get("name", "Partido Desconocido") + " vs " +
                                       teams.get("away", {}).get("name", ""),
                     "liga": league_info.get("name", "Desconocida"),
+                    "league_id": league_id,
                     "deporte": "futbol",
                     "goles_local_prom": 0.0,
                     "goles_visita_prom": 0.0,
@@ -202,27 +196,27 @@ def obtener_datos_futbol():
                     "racha_visita": 0,
                     "clima": 1,
                     "importancia_partido": 3,
+                    "season": season,
                     "hora": fixture.get("fixture", {}).get("date", datetime.utcnow().isoformat())
                 }
-                # Estadísticas para el equipo local
+                # Si no se detecta información esencial, se omite el registro
+                if registro["nombre_partido"].strip() == "" or registro["liga"].strip() == "":
+                    print("Registro omitido por datos incompletos:", registro)
+                    continue
+                # Se obtienen estadísticas para local y visitante
                 local_id = str(teams.get("home", {}).get("id", ""))
                 stats_local = obtener_estadisticas(local_id, league_id, season, "futbol")
                 registro["goles_local_prom"] = safe_numeric(stats_local.get("fixtures", {}).get("goals", {}).get("for"))
                 registro["racha_local"] = stats_local.get("fixtures", {}).get("streak", 0)
                 form_local = stats_local.get("fixtures", {}).get("form", "-----")
                 registro["ultimos_5_local"] = convert_form_string(form_local)[-5:]
-                # Para el equipo visitante
                 away_id = str(teams.get("away", {}).get("id", ""))
                 stats_away = obtener_estadisticas(away_id, league_id, season, "futbol")
                 registro["goles_visita_prom"] = safe_numeric(stats_away.get("fixtures", {}).get("goals", {}).get("for"))
                 registro["racha_visita"] = stats_away.get("fixtures", {}).get("streak", 0)
                 form_away = stats_away.get("fixtures", {}).get("form", "-----")
                 registro["ultimos_5_visitante"] = convert_form_string(form_away)[-5:]
-                # En caso de faltar datos críticos, si nombre de liga o partido son "Desconocida" o "Partido Desconocido", se ignora
-                if registro["nombre_partido"].strip() == "" or registro["liga"].strip() == "":
-                    print("Registro omitido por datos incompletos:", registro)
-                else:
-                    datos.append(registro)
+                datos.append(registro)
         else:
             print(f"Error en API-Sports fútbol: {resp.status_code} {resp.text}")
     except Exception as e:
@@ -300,6 +294,8 @@ def obtener_datos_nba():
                     "racha_visita": stats_away.get("games", {}).get("streak", 0),
                     "clima": 1,
                     "importancia_partido": 3,
+                    "league_id": league_id,
+                    "season": season,
                     "hora": game.get("date", datetime.utcnow().isoformat())
                 }
                 datos.append(registro)
@@ -335,6 +331,8 @@ def obtener_datos_nba():
                     "racha_visita": 2,
                     "clima": 1,
                     "importancia_partido": 3,
+                    "league_id": game.get("league", {}).get("id", ""),
+                    "season": game.get("league", {}).get("season", ""),
                     "hora": game.get("date", datetime.utcnow().isoformat())
                 }
                 datos.append(registro)
@@ -343,7 +341,7 @@ def obtener_datos_nba():
             print(f"Error en API-Sports NBA (v1): {resp.status_code} {resp.text}")
     except Exception as e:
         print(f"Excepción en API-Sports NBA (v1): {e}")
-    # Complemento: API de balldontlie (sin headers)
+    # Complemento: usar balldontlie (sin header)
     try:
         url_bd = f"{balldontlie_base_url}/games?start_date={get_today()}&end_date={get_today()}&per_page=100"
         resp_bd = requests.get(url_bd, timeout=10)
@@ -362,6 +360,8 @@ def obtener_datos_nba():
                     "racha_visita": 2,
                     "clima": 1,
                     "importancia_partido": 3,
+                    "league_id": "",
+                    "season": "",
                     "hora": game.get("date", datetime.utcnow().isoformat())
                 }
                 datos.append(registro)
@@ -434,17 +434,14 @@ def obtener_datos_actualizados():
     }]
 
 # --------------------------------------------------
-# Función para agregar parámetros adicionales a cada registro usando datos reales
+# Parametrización adicional a partir de datos reales
 # --------------------------------------------------
 def agregar_parametros_adicionales(registro):
     deporte = registro.get("deporte", "").lower()
-    # Se esperan parámetros adicionales que la API de estadísticas pueda proveer.
-    # Si no están disponibles, se asignarán valores por defecto.
+    # Se asumen los parámetros league_id y season vienen desde la fixture (si no, quedan vacíos)
+    league_id = str(registro.get("league_id", ""))
+    season = registro.get("season", "")
     if deporte in ["futbol", "nba", "mlb", "nhl"]:
-        # En este ejemplo, se intentan obtener datos de estadísticas usando los mismos valores del fixture.
-        # Se asume que la respuesta del fixture ya incluye (o se puede derivar) league_id y season.
-        league_id = str(registro.get("league_id", ""))
-        season = registro.get("season", "")
         team_local = str(registro.get("team_local_id", ""))
         stats = obtener_estadisticas(team_local, league_id, season, deporte)
         if deporte == "futbol":
@@ -471,7 +468,7 @@ def agregar_parametros_adicionales(registro):
             registro["racha_vict_local"] = stats.get("games", {}).get("streak", 0)
             form_local = stats.get("games", {}).get("form", "-----")
             registro["ultimos_5_local"] = convert_form_string(form_local)[-5:]
-        # Se asignan los mismos valores para parámetros de visitante
+        # Se replican estos parámetros para visitante (de forma simplificada)
         registro["param_3"] = registro["param_1"]
         registro["param_4"] = registro["param_2"]
         registro["racha_vict_visit"] = registro.get("racha_vict_local", 0)
@@ -492,8 +489,7 @@ def obtener_datos_entrenamiento():
     datos_actuales = obtener_datos_actualizados()
     print(f"Número de registros obtenidos para entrenamiento: {len(datos_actuales)}")
     datos_ext = [agregar_parametros_adicionales(d) for d in datos_actuales]
-    # Ampliar muestra de entrenamiento (simulación extra)
-    simulated_data = datos_ext * 10  
+    simulated_data = datos_ext * 10  # Amplía la muestra de entrenamiento
     for d in simulated_data:
         d["resultado"] = random.choice([0, 1, 2])
     training_rows = []
@@ -594,7 +590,7 @@ def actualizar_datos_partidos():
         try:
             hora_valor = partido["hora"]
             if isinstance(hora_valor, str):
-                # Si la hora viene en ISO, se asume UTC; si necesitas otra zona, aquí se ajusta
+                # Suponemos ISO en UTC; ajusta aquí si necesitas otra zona
                 hora_dt = datetime.fromisoformat(hora_valor)
             else:
                 hora_dt = hora_valor
@@ -635,8 +631,8 @@ def procesar_predicciones():
                 "pronostico_3": "Ambos no anotan",
                 "confianza_3": 0.65
             }
-            result = manual_upsert("predicciones", prediccion, ["partido", "hora"])
-            print(f"Registro en predicciones {prediccion['partido']}: {result}")
+            res_upsert = manual_upsert("predicciones", prediccion, ["partido", "hora"])
+            print(f"Registro en predicciones {prediccion['partido']}: {res_upsert}")
         return {"message": "Predicciones generadas correctamente"}
     except Exception as e:
         print(f"Error global en el procesamiento de predicciones: {e}")
@@ -663,7 +659,7 @@ def insertar_nba_balldontlie():
             print(f"Error obteniendo equipos de balldontlie: {response.status_code} {response.text}")
     except Exception as e:
         print(f"Excepción al obtener equipos de balldontlie: {e}")
-
+    
     # Insertar juegos del día de balldontlie
     try:
         resp = requests.get(f"{balldontlie_base_url}/games?start_date={get_today()}&end_date={get_today()}&per_page=100", timeout=10)
@@ -690,7 +686,7 @@ def insertar_nba_balldontlie():
     except Exception as e:
         print(f"Excepción en juegos de balldontlie: {e}")
     
-    # Insertar estadísticas de juegos del día de balldontlie en predicciones
+    # Insertar estadísticas de juegos del día desde balldontlie en la tabla predicciones
     try:
         resp = requests.get(f"{balldontlie_base_url}/stats?start_date={get_today()}&end_date={get_today()}&per_page=100", timeout=10)
         if resp.status_code == 200:
