@@ -5,50 +5,36 @@ from datetime import datetime
 import pandas as pd
 import xgboost as xgb
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
-import requests
 from supabase import create_client, Client
+import requests
 import random
 from dotenv import load_dotenv
 
-# Cargar variables de entorno
 load_dotenv()
 
-# Conexión a Supabase
+# --- Supabase client ---
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Claves API
+# --- API Keys & Endpoints ---
 api_sports_key = os.getenv("API_SPORTS_KEY")
 balldontlie_base_url = "https://api.balldontlie.io/v1"
-balldontlie_api_key = "5293380d-9c4f-4e89-be15-bf19b1042182"
 
-# ===============================
-# Funciones de inserción y upsert
-# ===============================
+# --- Helpers ---
+def get_today():
+    return datetime.utcnow().strftime("%Y-%m-%d")
 
-def insertar_league(nombre_liga: str, deporte: str):
+def safe_numeric(value):
+    """Convierte a float o devuelve 0.0 en caso de dict/None."""
     try:
-        if nombre_liga.lower() == "desconocida":
-            print("Liga no insertada: valor 'Desconocida'")
-            return
-        existe = supabase.table("leagues").select("*").match({"name": nombre_liga}).execute()
-        if not existe.data:
-            supabase.table("leagues").insert({
-                "id": str(uuid.uuid4()),
-                "name": nombre_liga,
-                "country": "Unknown",
-                "flag": None,
-            }).execute()
-            print(f"Liga insertada: {nombre_liga}")
-    except Exception as e:
-        print(f"Error al insertar liga {nombre_liga}: {e}")
+        return float(value)
+    except Exception:
+        print(f"safe_numeric: Se recibió un {type(value).__name__}; se asigna 0.0")
+        return 0.0
 
 def upsert_partido(data_game: dict):
-    """
-    Inserta o actualiza un partido usando ON CONFLICT (nombre_partido, hora).
-    """
+    """Hace upsert en 'partidos' con retries y logs."""
     for intento in range(1, 4):
         try:
             supabase.table("partidos") \
@@ -61,149 +47,135 @@ def upsert_partido(data_game: dict):
             time.sleep(1)
     print(f"Falló upsert definitivo en partidos: {data_game['nombre_partido']}")
 
-# ===============================
-# Helpers
-# ===============================
-
-def get_today():
-    return datetime.utcnow().strftime("%Y-%m-%d")
-
-def safe_numeric(val):
-    """
-    Intenta convertir a float; si es dict o None o falla, retorna 0.0.
-    """
-    if isinstance(val, dict):
-        return float(val.get("points", 0) if "points" in val else 0)
+# --- Inserción de ligas/partidos simples ---
+def insertar_league(nombre_liga: str, deporte: str):
+    if nombre_liga.lower() == "desconocida":
+        return
     try:
-        return float(val)
-    except:
-        return 0.0
+        existe = supabase.table("leagues").select("*").eq("name", nombre_liga).execute()
+        if not existe.data:
+            supabase.table("leagues").insert({
+                "id": str(uuid.uuid4()),
+                "name": nombre_liga,
+                "country": "Unknown",
+                "flag": None,
+            }).execute()
+            print(f"Liga insertada: {nombre_liga}")
+    except Exception as e:
+        print(f"Error al insertar liga {nombre_liga}: {e}")
 
-# ===============================
-# Configuración Endpoints
-# ===============================
-
+# --- Datos de Fútbol ---
 OPENLIGADB_ENDPOINTS = [
     "https://api.openligadb.de/getmatchdata/dfb/2024/5",
-    # ... demás endpoints ...
+    # ... otras ligas ...
 ]
-
-# ===============================
-# Obtención de datos por deporte
-# ===============================
 
 def obtener_datos_futbol():
     datos = []
     today = get_today()
-    print(f"Obteniendo fútbol para {today} desde API-Sports v3...")
+    # API-Sports fútbol
     try:
-        url_api = f"https://v3.football.api-sports.io/fixtures?date={today}"
-        headers = {"x-apisports-key": api_sports_key}
-        resp = requests.get(url_api, headers=headers, timeout=10)
-        if resp.status_code == 200:
-            fixtures = resp.json().get("response", [])
-            print(f"Obtenidos {len(fixtures)} fixtures de API-Sports fútbol")
-            for f in fixtures:
-                fx = f.get("fixture", {})
-                teams = f.get("teams", {})
-                stats = f.get("goals", {})
+        r = requests.get(
+            f"https://v3.football.api-sports.io/fixtures?date={today}",
+            headers={"x-apisports-key": api_sports_key}, timeout=10
+        )
+        fixtures = r.json().get("response", []) if r.status_code == 200 else []
+        print(f"Obtenidos {len(fixtures)} fixtures de API-Sports fútbol")
+        for f in fixtures:
+            teams = f.get("teams", {})
+            datos.append({
+                "nombre_partido": f"{teams.get('home',{}).get('name','Desconocido')} vs {teams.get('away',{}).get('name','Desconocido')}",
+                "liga": f.get("league",{}).get("name","Desconocida"),
+                "deporte": "futbol",
+                "goles_local_prom": safe_numeric(f.get("goals",{}).get("home")),
+                "goles_visita_prom": safe_numeric(f.get("goals",{}).get("away")),
+                "racha_local": 3,
+                "racha_visita": 2,
+                "clima": 1,
+                "importancia_partido": 3,
+                "hora": f.get("fixture",{}).get("date", datetime.utcnow().isoformat())
+            })
+    except Exception as ex:
+        print("Error API-Sports fútbol:", ex)
+
+    # Complemento OpenLigaDB
+    for ep in OPENLIGADB_ENDPOINTS:
+        try:
+            r2 = requests.get(ep, timeout=10)
+            fixes = r2.json() if r2.status_code==200 else []
+            print(f"Obtenidos {len(fixes)} fixtures de OpenLigaDB")
+            for p in fixes:
                 datos.append({
-                    "nombre_partido": f"{teams.get('home', {}).get('name','')} vs {teams.get('away',{}).get('name','')}",
-                    "liga": f.get("league", {}).get("name", "Desconocida"),
+                    "nombre_partido": p.get("MatchName","Desconocido"),
+                    "liga": p.get("League","Desconocida"),
                     "deporte": "futbol",
-                    "goles_local_prom": safe_numeric(stats.get("home")),
-                    "goles_visita_prom": safe_numeric(stats.get("away")),
+                    "goles_local_prom": safe_numeric(p.get("MatchResults",[{}])[0].get("PointsTeam1")),
+                    "goles_visita_prom": safe_numeric(p.get("MatchResults",[{}])[0].get("PointsTeam2")),
                     "racha_local": 3,
                     "racha_visita": 2,
                     "clima": 1,
                     "importancia_partido": 3,
-                    "hora": fx.get("date", datetime.utcnow().isoformat())
+                    "hora": p.get("MatchDateTime", datetime.utcnow().isoformat())
                 })
-        else:
-            print("Error en API-Sports fútbol:", resp.status_code, resp.text)
-    except Exception as e:
-        print("Excepción en API-Sports fútbol:", e)
+        except Exception as ex:
+            print("Error OpenLigaDB:", ex)
 
-    # Complemento OpenLigaDB...
-    total_ol = 0
-    for ep in OPENLIGADB_ENDPOINTS:
-        try:
-            r = requests.get(ep, timeout=10)
-            if r.status_code == 200:
-                fixtures = r.json()
-                total_ol += len(fixtures)
-                for p in fixtures:
-                    datos.append({
-                        "nombre_partido": p.get("MatchName", "Partido Desconocido"),
-                        "liga": p.get("League", "Desconocida"),
-                        "deporte": "futbol",
-                        "goles_local_prom": p.get("MatchResults", [{}])[0].get("PointsTeam1",1.5),
-                        "goles_visita_prom": p.get("MatchResults", [{}])[0].get("PointsTeam2",1.2),
-                        "racha_local": 3,
-                        "racha_visita": 2,
-                        "clima": 1,
-                        "importancia_partido": 3,
-                        "hora": p.get("MatchDateTime", datetime.utcnow().isoformat())
-                    })
-        except Exception as e:
-            print("Error en OpenLigaDB:", e)
-    print(f"Obtenidos {total_ol} fixtures de OpenLigaDB")
+    print(f"Total fútbol registros: {len(datos)}")
     return datos
 
+# --- Datos de NBA ---
 def obtener_datos_nba():
     datos = []
     today = get_today()
-    total = 0
-    # API-Sports v2
+    # API-Sports NBA v2
     try:
-        url_v2 = f"https://v2.nba.api-sports.io/games?date={today}"
-        headers = {"x-apisports-key": api_sports_key}
-        r2 = requests.get(url_v2, headers=headers, timeout=10)
-        if r2.status_code == 200:
-            resp = r2.json().get("response", [])
-            print(f"Obtenidos {len(resp)} juegos de API-Sports NBA (v2)")
-            for g in resp:
-                teams = g.get("teams", {})
-                score = g.get("scores", {})
-                datos.append({
-                    "nombre_partido": f"{teams.get('home',{}).get('name','Desconocido')} vs {teams.get('away',{}).get('name','')}",
-                    "liga": g.get("league",{}).get("name","NBA"),
-                    "deporte": "NBA",
-                    "goles_local_prom": safe_numeric(score.get("home"))/10,
-                    "goles_visita_prom": safe_numeric(score.get("away"))/10,
-                    "racha_local": 3,
-                    "racha_visita": 2,
-                    "clima": 1,
-                    "importancia_partido": 3,
-                    "hora": g.get("date", datetime.utcnow().isoformat())
-                })
-            total += len(resp)
-        else:
-            print("Error en API-Sports NBA (v2):", r2.status_code)
-    except Exception as e:
-        print("Excepción en API-Sports NBA (v2):", e)
-    # ...Aquí podrías intentar v1 y balldontlie de forma similar...
-    print(f"Total NBA fixtures recopilados: {total}")
+        r2 = requests.get(
+            f"https://v2.nba.api-sports.io/games?date={today}",
+            headers={"x-apisports-key": api_sports_key}, timeout=10
+        )
+        resp = r2.json().get("response", []) if r2.status_code==200 else []
+        print(f"Obtenidos {len(resp)} juegos de API-Sports NBA (v2)")
+        for g in resp:
+            teams = g.get("teams")
+            if not isinstance(teams, dict):
+                print("NBA v2: formato inesperado de teams, omitiendo", teams)
+                continue
+            scores = g.get("scores", {})
+            datos.append({
+                "nombre_partido": f"{teams['home']['name']} vs {teams['away']['name']}",
+                "liga": g.get("league",{}).get("name","NBA"),
+                "deporte": "NBA",
+                "goles_local_prom": safe_numeric(scores.get("home"))/10,
+                "goles_visita_prom": safe_numeric(scores.get("away"))/10,
+                "racha_local": 3,
+                "racha_visita": 2,
+                "clima": 1,
+                "importancia_partido": 3,
+                "hora": g.get("date", datetime.utcnow().isoformat())
+            })
+    except Exception as ex:
+        print("Excepción en API-Sports NBA (v2):", ex)
+
+    print(f"Total NBA fixtures recopilados: {len(datos)}")
     return datos
 
-def obtener_datos_deporte_api(deporte):
+# --- Datos MLB & NHL via API-Sports ---
+def obtener_datos_deporte_api(deporte: str):
     datos = []
     today = get_today()
     if deporte.upper() == "MLB":
-        endpoint = "https://v1.baseball.api-sports.io/games"
-    elif deporte.upper() == "NHL":
-        endpoint = "https://v1.hockey.api-sports.io/games"
+        url = "https://v1.baseball.api-sports.io/games"
     else:
-        return datos
+        url = "https://v1.hockey.api-sports.io/games"
     try:
-        r = requests.get(endpoint, headers={"x-apisports-key": api_sports_key}, params={"date": today}, timeout=10)
-        resp = r.json().get("response", [])
+        r = requests.get(url, headers={"x-apisports-key": api_sports_key}, params={"date": today}, timeout=10)
+        resp = r.json().get("response", []) if r.status_code==200 else []
         print(f"{deporte}: obtenidos {len(resp)} juegos de API-Sports")
         for g in resp:
             teams = g.get("teams", {})
             scores = g.get("scores", {})
             datos.append({
-                "nombre_partido": f"{teams.get('home',{}).get('name','')} vs {teams.get('away',{}).get('name','')}",
+                "nombre_partido": f"{teams.get('home',{}).get('name','Local')} vs {teams.get('away',{}).get('name','Visitante')}",
                 "liga": g.get("league",{}).get("name","Desconocida"),
                 "deporte": deporte,
                 "goles_local_prom": safe_numeric(scores.get("home")),
@@ -214,148 +186,104 @@ def obtener_datos_deporte_api(deporte):
                 "importancia_partido": 3,
                 "hora": g.get("date", datetime.utcnow().isoformat())
             })
-    except Exception as e:
-        print(f"Error en API-Sports {deporte}:", e)
+    except Exception as ex:
+        print(f"Excepción en API-Sports {deporte}:", ex)
     return datos
 
+# --- Consolidación ---
 def obtener_datos_actualizados():
     datos = []
     datos.extend(obtener_datos_futbol())
     datos.extend(obtener_datos_nba())
-    for dep in ["MLB", "NHL"]:
+    for dep in ["MLB","NHL"]:
         datos.extend(obtener_datos_deporte_api(dep))
     print(f"Total de registros obtenidos de todas las fuentes: {len(datos)}")
     return datos
 
-# ===============================
-# Entrenamiento y predicción
-# ===============================
-
+# --- Entrenamiento ---
 def obtener_datos_entrenamiento():
-    datos = obtener_datos_actualizados()
-    if not datos:
-        print("El DataFrame de entrenamiento está vacío.")
-        return pd.DataFrame()
-    print(f"Número de registros obtenidos para entrenamiento: {len(datos)}")
-    # Duplicar, simular resultados, etc.
-    sim = datos * 10
+    actual = obtener_datos_actualizados()
+    sim = actual * 5
+    for d in sim:
+        d["resultado"] = random.choice([0,1,2])  # 0 local,1 empate,2 visita
     rows = []
     for d in sim:
         try:
             rows.append({
-                "goles_local_prom": float(d.get("goles_local_prom", 0.0)),
-                "goles_visita_prom": float(d.get("goles_visita_prom", 0.0)),
-                "racha_local": int(d.get("racha_local", 0)),
-                "racha_visita": int(d.get("racha_visita", 0)),
-                "clima": int(d.get("clima", 1)),
-                "importancia_partido": int(d.get("importancia_partido", 3)),
-                "resultado": random.choice([0,1,2])
+                "goles_local_prom": safe_numeric(d["goles_local_prom"]),
+                "goles_visita_prom": safe_numeric(d["goles_visita_prom"]),
+                "racha_local": int(d["racha_local"]),
+                "racha_visita": int(d["racha_visita"]),
+                "clima": int(d["clima"]),
+                "importancia_partido": int(d["importancia_partido"]),
+                "resultado": int(d["resultado"]),
             })
         except Exception as e:
             print("Error construyendo datos de entrenamiento:", e)
     df = pd.DataFrame(rows)
-    if df.empty or df["resultado"].nunique() < 2:
-        print("Datos insuficientes o una sola clase en 'resultado'.")
-    else:
-        print("Datos de entrenamiento listos. Distribución de clases:", df["resultado"].value_counts().to_dict())
+    print(f"Número de registros de entrenamiento: {len(df)}")
+    print("Distribución de clases:", df["resultado"].value_counts().to_dict())
     return df
 
 def entrenar_modelo():
     df = obtener_datos_entrenamiento()
-    if df.empty or df["resultado"].nunique() < 2:
-        print("No hay datos suficientes para entrenar un modelo válido.")
+    if df.empty or df["resultado"].nunique()<2:
+        print("Datos insuficientes, entrenamiento abortado")
         return None
     X = df.drop("resultado", axis=1)
     y = df["resultado"]
-    X_train, X_test, y_train, y_test = train_test_split(X, y,
-                                                        test_size=0.3,
-                                                        random_state=42,
-                                                        stratify=y)
-    model = xgb.XGBClassifier(eval_metric="logloss", use_label_encoder=False)
+    X_train, X_test, y_train, y_test = train_test_split(X,y,test_size=0.3,random_state=42,stratify=y)
+    model = xgb.XGBClassifier(eval_metric="mlogloss")
     model.fit(X_train, y_train)
-    preds = model.predict(X_test)
-    print(f"Precisión del modelo: {accuracy_score(y_test, preds):.2f}")
+    acc = (model.predict(X_test)==y_test).mean()
+    print(f"Precisión del modelo: {acc:.2f}")
     return model
 
-def predecir_resultado(modelo, partido):
-    df = pd.DataFrame([{
-        "goles_local_prom": partido["goles_local_prom"],
-        "goles_visita_prom": partido["goles_visita_prom"],
-        "racha_local": partido["racha_local"],
-        "racha_visita": partido["racha_visita"],
-        "clima": partido["clima"],
-        "importancia_partido": partido["importancia_partido"]
+# --- Predicción ---
+def predecir_resultado(modelo, d):
+    features = pd.DataFrame([{
+        "goles_local_prom": safe_numeric(d["goles_local_prom"]),
+        "goles_visita_prom": safe_numeric(d["goles_visita_prom"]),
+        "racha_local": int(d["racha_local"]),
+        "racha_visita": int(d["racha_visita"]),
+        "clima": int(d["clima"]),
+        "importancia_partido": int(d["importancia_partido"]),
     }])
-    try:
-        pred = modelo.predict(df)[0]
-    except Exception as e:
-        print("Error prediciendo:", e)
-        return ("Indefinido", 0.0)
-    opciones = {
-        0: ("Gana Local", 0.70),
-        1: ("Empate",     0.65),
-        2: ("Gana Visit", 0.68),
-    }
-    return opciones.get(pred, ("Indefinido", 0.0))
-
-# ===============================
-# Pipeline: actualizar + predecir
-# ===============================
-
-def actualizar_datos_partidos():
-    nuevos = obtener_datos_actualizados()
-    for p in nuevos:
-        # normalizar hora
-        h = p["hora"]
-        if isinstance(h, str):
-            try:
-                h = datetime.fromisoformat(h)
-            except:
-                h = datetime.utcnow()
-        p["hora"] = h.strftime("%Y-%m-%d %H:%M:%S")
-        insertar_league(p["liga"], p["deporte"])
-        upsert_partido(p)
-    return {"status": "Datos actualizados correctamente"}
+    pred = modelo.predict(features)[0]
+    mapping = {0:("Gana Local",0.70),1:("Empate",0.50),2:("Gana Visitante",0.70)}
+    return mapping.get(pred,("Indefinido",0.0))
 
 def procesar_predicciones():
-    try:
-        model = entrenar_modelo()
-        if model is None:
-            raise ValueError("Modelo no entrenado.")
-        partidos = obtener_datos_actualizados()
-        for p in partidos:
-            h = p["hora"]
-            if isinstance(h, str):
-                try:
-                    h = datetime.fromisoformat(h)
-                except:
-                    h = datetime.utcnow()
-            p["hora"] = h.strftime("%Y-%m-%d %H:%M:%S")
-            res, conf = predecir_resultado(model, p)
-            pred = {
-                "deporte": p["deporte"],
-                "liga": p["liga"],
-                "partido": p["nombre_partido"],
-                "hora": p["hora"],
-                "pronostico_1": res,
-                "confianza_1": conf,
-                "pronostico_2": "Menos de 2.5 goles",
-                "confianza_2": 0.70,
-                "pronostico_3": "Ambos no anotan",
-                "confianza_3": 0.65
-            }
-            supabase.table("predicciones") \
-                .upsert(pred, on_conflict=["partido","hora"]) \
-                .execute()
-            print(f"Predicción guardada: {pred['partido']}")
-        return {"message": "Predicciones generadas correctamente"}
-    except Exception as e:
-        print("Error global en el procesamiento de predicciones:", e)
-        return {"message": "Error en predicciones", "error": str(e)}
+    model = entrenar_modelo()
+    if model is None:
+        print("No se generaron predicciones por falta de modelo")
+        return
+    partidos = obtener_datos_actualizados()
+    for p in partidos:
+        p["hora"] = datetime.fromisoformat(p["hora"][:19]).strftime("%Y-%m-%d %H:%M:%S")
+        resultado, confianza = predecir_resultado(model, p)
+        pred = {
+            "deporte": p["deporte"],
+            "liga": p["liga"],
+            "partido": p["nombre_partido"],
+            "hora": p["hora"],
+            "pronostico_1": resultado,
+            "confianza_1": confianza
+        }
+        upsert_partido(pred)
+    print("Predicciones generadas correctamente.")
 
+# --- Pipeline completo ---
 def ejecutar_pipeline():
-    actualizar_datos_partidos()
-    procesar_predicciones()
+    try:
+        # Insertar ligas y partidos
+        for p in obtener_datos_actualizados():
+            insertar_league(p["liga"], p["deporte"])
+            upsert_partido(p)
+        # Generar predicciones
+        procesar_predicciones()
+    except Exception as e:
+        print("Error global en el pipeline:", e)
 
 if __name__ == "__main__":
     ejecutar_pipeline()
